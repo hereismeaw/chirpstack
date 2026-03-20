@@ -10,7 +10,7 @@
   ]
 
   [workspace.package]
-    version = "4.17.0-test.1"
+    version = "4.17.0"
     homepage = "https://www.chirpstack.io"
     license = "MIT"
     authors = ["Orne Brocaar <info@brocaar.com>"]
@@ -166,7 +166,7 @@
       "cmake-build",
     ] }
     # Needed until this issue has been solved: https://github.com/fede1024/rust-rdkafka/issues/829
-    rdkafka-sys = "~4.9.0"
+    rdkafka-sys = { version = "~4.9.0", default-features = false }
     rumqttc = { version = "0.25", default-features = false, features = [
       "url",
       "use-rustls-no-provider",
