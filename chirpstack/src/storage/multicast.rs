@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use diesel::{dsl, prelude::*};
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use tracing::info;
 use uuid::Uuid;
 
@@ -13,7 +13,7 @@ use super::schema::{
     application, device, gateway, multicast_group, multicast_group_device, multicast_group_gateway,
     multicast_group_queue_item,
 };
-use super::{db_transaction, fields, get_async_db_conn};
+use super::{fields, get_async_db_conn};
 use crate::downlink::classb;
 use crate::{config, gpstime::ToDateTime, gpstime::ToGpsTime};
 
@@ -78,10 +78,13 @@ pub struct MulticastGroupListItem {
     pub name: String,
     pub region: CommonName,
     pub group_type: String,
+    pub application_id: fields::Uuid,
+    pub application_name: String,
 }
 
 #[derive(Default, Clone)]
 pub struct Filters {
+    pub tenant_id: Option<Uuid>,
     pub application_id: Option<Uuid>,
     pub search: Option<String>,
     pub dev_eui: Option<EUI64>,
@@ -190,20 +193,25 @@ pub async fn delete(id: &Uuid) -> Result<(), Error> {
 }
 
 pub async fn get_count(filters: &Filters) -> Result<i64, Error> {
-    let mut q = multicast_group::dsl::multicast_group
+    let mut q = multicast_group::table
+        .inner_join(application::table)
         .select(dsl::count_star())
         .into_boxed();
 
+    if let Some(tenant_id) = &filters.tenant_id {
+        q = q.filter(application::tenant_id.eq(fields::Uuid::from(tenant_id)));
+    }
+
     if let Some(application_id) = &filters.application_id {
-        q = q.filter(multicast_group::dsl::application_id.eq(fields::Uuid::from(application_id)));
+        q = q.filter(multicast_group::application_id.eq(fields::Uuid::from(application_id)));
     }
 
     if let Some(dev_eui) = &filters.dev_eui {
         q = q.filter(
-            multicast_group::dsl::id.eq_any(
-                multicast_group_device::dsl::multicast_group_device
-                    .select(multicast_group_device::dsl::multicast_group_id)
-                    .filter(multicast_group_device::dsl::dev_eui.eq(dev_eui)),
+            multicast_group::id.eq_any(
+                multicast_group_device::table
+                    .select(multicast_group_device::multicast_group_id)
+                    .filter(multicast_group_device::dev_eui.eq(dev_eui)),
             ),
         );
     }
@@ -229,7 +237,8 @@ pub async fn list(
     offset: i64,
     filters: &Filters,
 ) -> Result<Vec<MulticastGroupListItem>, Error> {
-    let mut q = multicast_group::dsl::multicast_group
+    let mut q = multicast_group::table
+        .inner_join(application::table)
         .select((
             multicast_group::id,
             multicast_group::created_at,
@@ -237,19 +246,25 @@ pub async fn list(
             multicast_group::name,
             multicast_group::region,
             multicast_group::group_type,
+            application::id,
+            application::name,
         ))
         .into_boxed();
 
+    if let Some(tenant_id) = &filters.tenant_id {
+        q = q.filter(application::tenant_id.eq(fields::Uuid::from(tenant_id)));
+    }
+
     if let Some(application_id) = &filters.application_id {
-        q = q.filter(multicast_group::dsl::application_id.eq(fields::Uuid::from(application_id)));
+        q = q.filter(multicast_group::application_id.eq(fields::Uuid::from(application_id)));
     }
 
     if let Some(dev_eui) = &filters.dev_eui {
         q = q.filter(
-            multicast_group::dsl::id.eq_any(
-                multicast_group_device::dsl::multicast_group_device
-                    .select(multicast_group_device::dsl::multicast_group_id)
-                    .filter(multicast_group_device::dsl::dev_eui.eq(dev_eui)),
+            multicast_group::id.eq_any(
+                multicast_group_device::table
+                    .select(multicast_group_device::multicast_group_id)
+                    .filter(multicast_group_device::dev_eui.eq(dev_eui)),
             ),
         );
     }
@@ -275,43 +290,40 @@ pub async fn list(
 
 pub async fn add_device(group_id: &Uuid, dev_eui: &EUI64) -> Result<(), Error> {
     let mut c = get_async_db_conn().await?;
-    db_transaction::<(), Error, _>(&mut c, |c| {
-        Box::pin(async move {
-            let device_query = device::dsl::device.find(&dev_eui);
-            #[cfg(feature = "postgres")]
-            let device_query = device_query.for_update();
-            let d: super::device::Device = device_query
-                .get_result(c)
-                .await
-                .map_err(|e| Error::from_diesel(e, dev_eui.to_string()))?;
+    c.transaction::<(), Error, _>(async |c| {
+        let device_query = device::dsl::device.find(&dev_eui);
+        #[cfg(feature = "postgres")]
+        let device_query = device_query.for_update();
+        let d: super::device::Device = device_query
+            .get_result(c)
+            .await
+            .map_err(|e| Error::from_diesel(e, dev_eui.to_string()))?;
 
-            let fields_group_id = fields::Uuid::from(group_id);
+        let fields_group_id = fields::Uuid::from(group_id);
 
-            let multicast_group_query =
-                multicast_group::dsl::multicast_group.find(&fields_group_id);
-            #[cfg(feature = "postgres")]
-            let multicast_group_query = multicast_group_query.for_update();
-            let mg: MulticastGroup = multicast_group_query
-                .get_result(c)
-                .await
-                .map_err(|e| Error::from_diesel(e, group_id.to_string()))?;
+        let multicast_group_query = multicast_group::dsl::multicast_group.find(&fields_group_id);
+        #[cfg(feature = "postgres")]
+        let multicast_group_query = multicast_group_query.for_update();
+        let mg: MulticastGroup = multicast_group_query
+            .get_result(c)
+            .await
+            .map_err(|e| Error::from_diesel(e, group_id.to_string()))?;
 
-            if d.application_id != mg.application_id {
-                // Device not found within the same application.
-                return Err(Error::NotFound(dev_eui.to_string()));
-            }
+        if d.application_id != mg.application_id {
+            // Device not found within the same application.
+            return Err(Error::NotFound(dev_eui.to_string()));
+        }
 
-            let _ = diesel::insert_into(multicast_group_device::table)
-                .values((
-                    multicast_group_device::multicast_group_id.eq(&fields_group_id),
-                    multicast_group_device::dev_eui.eq(&dev_eui),
-                    multicast_group_device::created_at.eq(Utc::now()),
-                ))
-                .execute(c)
-                .await
-                .map_err(|e| Error::from_diesel(e, "".into()))?;
-            Ok(())
-        })
+        let _ = diesel::insert_into(multicast_group_device::table)
+            .values((
+                multicast_group_device::multicast_group_id.eq(&fields_group_id),
+                multicast_group_device::dev_eui.eq(&dev_eui),
+                multicast_group_device::created_at.eq(Utc::now()),
+            ))
+            .execute(c)
+            .await
+            .map_err(|e| Error::from_diesel(e, "".into()))?;
+        Ok(())
     })
     .await?;
     info!(multicast_group_id = %group_id, dev_eui = %dev_eui, "Device added to multicast-group");
@@ -338,51 +350,48 @@ pub async fn remove_device(group_id: &Uuid, dev_eui: &EUI64) -> Result<(), Error
 
 pub async fn add_gateway(group_id: &Uuid, gateway_id: &EUI64) -> Result<(), Error> {
     let mut c = get_async_db_conn().await?;
-    db_transaction::<(), Error, _>(&mut c, |c| {
-        Box::pin(async move {
-            let gateway_query = gateway::dsl::gateway.find(&gateway_id);
-            #[cfg(feature = "postgres")]
-            let gateway_query = gateway_query.for_update();
-            let gw: super::gateway::Gateway = gateway_query
-                .get_result(c)
-                .await
-                .map_err(|e| Error::from_diesel(e, gateway_id.to_string()))?;
+    c.transaction::<(), Error, _>(async |c| {
+        let gateway_query = gateway::dsl::gateway.find(&gateway_id);
+        #[cfg(feature = "postgres")]
+        let gateway_query = gateway_query.for_update();
+        let gw: super::gateway::Gateway = gateway_query
+            .get_result(c)
+            .await
+            .map_err(|e| Error::from_diesel(e, gateway_id.to_string()))?;
 
-            let fields_group_id = fields::Uuid::from(group_id);
+        let fields_group_id = fields::Uuid::from(group_id);
 
-            let multicast_group_query =
-                multicast_group::dsl::multicast_group.find(&fields_group_id);
-            #[cfg(feature = "postgres")]
-            let multicast_group_query = multicast_group_query.for_update();
-            let mg: MulticastGroup = multicast_group_query
-                .get_result(c)
-                .await
-                .map_err(|e| Error::from_diesel(e, group_id.to_string()))?;
+        let multicast_group_query = multicast_group::dsl::multicast_group.find(&fields_group_id);
+        #[cfg(feature = "postgres")]
+        let multicast_group_query = multicast_group_query.for_update();
+        let mg: MulticastGroup = multicast_group_query
+            .get_result(c)
+            .await
+            .map_err(|e| Error::from_diesel(e, group_id.to_string()))?;
 
-            let application_query = application::dsl::application.find(&mg.application_id);
-            #[cfg(feature = "postgres")]
-            let application_query = application_query.for_update();
-            let a: super::application::Application = application_query
-                .get_result(c)
-                .await
-                .map_err(|e| Error::from_diesel(e, mg.application_id.to_string()))?;
+        let application_query = application::dsl::application.find(&mg.application_id);
+        #[cfg(feature = "postgres")]
+        let application_query = application_query.for_update();
+        let a: super::application::Application = application_query
+            .get_result(c)
+            .await
+            .map_err(|e| Error::from_diesel(e, mg.application_id.to_string()))?;
 
-            if a.tenant_id != gw.tenant_id {
-                // Gateway and multicast-group are not under same tenant.
-                return Err(Error::NotFound(gateway_id.to_string()));
-            }
+        if a.tenant_id != gw.tenant_id {
+            // Gateway and multicast-group are not under same tenant.
+            return Err(Error::NotFound(gateway_id.to_string()));
+        }
 
-            let _ = diesel::insert_into(multicast_group_gateway::table)
-                .values((
-                    multicast_group_gateway::multicast_group_id.eq(&fields_group_id),
-                    multicast_group_gateway::gateway_id.eq(&gateway_id),
-                    multicast_group_gateway::created_at.eq(Utc::now()),
-                ))
-                .execute(c)
-                .await
-                .map_err(|e| Error::from_diesel(e, "".into()))?;
-            Ok(())
-        })
+        let _ = diesel::insert_into(multicast_group_gateway::table)
+            .values((
+                multicast_group_gateway::multicast_group_id.eq(&fields_group_id),
+                multicast_group_gateway::gateway_id.eq(&gateway_id),
+                multicast_group_gateway::created_at.eq(Utc::now()),
+            ))
+            .execute(c)
+            .await
+            .map_err(|e| Error::from_diesel(e, "".into()))?;
+        Ok(())
     })
     .await?;
     info!(multicast_group_id = %group_id, gateway_id = %gateway_id, "Gateway added to multicast-group");
@@ -436,8 +445,8 @@ pub async fn enqueue(
     qi.validate()?;
     let mut c = get_async_db_conn().await?;
     let conf = config::get();
-    let (ids, f_cnt) = db_transaction::<(Vec<Uuid>, u32), Error, _>(&mut c, |c| {
-        Box::pin(async move {
+    let (ids, f_cnt) = c
+        .transaction::<(Vec<Uuid>, u32), Error, _>(async |c| {
             let mut ids: Vec<Uuid> = Vec::new();
             let query = multicast_group::dsl::multicast_group.find(&qi.multicast_group_id);
             #[cfg(feature = "postgres")]
@@ -605,8 +614,7 @@ pub async fn enqueue(
             // Return value before it was incremented
             Ok((ids, mg.f_cnt as u32))
         })
-    })
-    .await?;
+        .await?;
     info!(multicast_group_id = %qi.multicast_group_id, f_cnt = f_cnt, "Multicast-group queue item created");
     Ok((ids, f_cnt))
 }
@@ -652,8 +660,7 @@ pub async fn get_queue(multicast_group_id: &Uuid) -> Result<Vec<MulticastGroupQu
 
 pub async fn get_schedulable_queue_items(limit: usize) -> Result<Vec<MulticastGroupQueueItem>> {
     let mut c = get_async_db_conn().await?;
-    db_transaction::<Vec<MulticastGroupQueueItem>, Error, _>(&mut c, |c| {
-            Box::pin(async move {
+    c.transaction::<Vec<MulticastGroupQueueItem>, Error, _>(async |c| {
                 let conf = config::get();
                 diesel::sql_query(if cfg!(feature = "sqlite") {
                     r#"
@@ -709,7 +716,6 @@ pub async fn get_schedulable_queue_items(limit: usize) -> Result<Vec<MulticastGr
                 .load(c)
                 .await
                 .map_err(|e| Error::from_diesel(e, "".into()))
-            })
         })
         .await
         .context("Get schedulable multicast-group queue items")
@@ -815,6 +821,7 @@ pub mod test {
         let tests = vec![
             FilterTest {
                 filters: Filters {
+                    tenant_id: None,
                     application_id: None,
                     dev_eui: None,
                     search: None,
@@ -826,6 +833,7 @@ pub mod test {
             },
             FilterTest {
                 filters: Filters {
+                    tenant_id: None,
                     application_id: None,
                     dev_eui: None,
                     search: Some("teest".into()),
@@ -837,6 +845,7 @@ pub mod test {
             },
             FilterTest {
                 filters: Filters {
+                    tenant_id: None,
                     application_id: None,
                     dev_eui: None,
                     search: Some("upd".into()),
@@ -848,6 +857,7 @@ pub mod test {
             },
             FilterTest {
                 filters: Filters {
+                    tenant_id: None,
                     application_id: Some(app.id.into()),
                     dev_eui: None,
                     search: None,
@@ -859,6 +869,19 @@ pub mod test {
             },
             FilterTest {
                 filters: Filters {
+                    tenant_id: Some(t.id.into()),
+                    application_id: None,
+                    dev_eui: None,
+                    search: None,
+                },
+                groups: vec![&mg],
+                count: 1,
+                limit: 10,
+                offset: 0,
+            },
+            FilterTest {
+                filters: Filters {
+                    tenant_id: None,
                     application_id: Some(Uuid::new_v4()),
                     dev_eui: None,
                     search: None,
@@ -870,6 +893,7 @@ pub mod test {
             },
             FilterTest {
                 filters: Filters {
+                    tenant_id: None,
                     application_id: None,
                     dev_eui: Some(EUI64::from_be_bytes([1, 1, 1, 1, 1, 1, 1, 1])),
                     search: None,
@@ -881,6 +905,7 @@ pub mod test {
             },
             FilterTest {
                 filters: Filters {
+                    tenant_id: None,
                     application_id: None,
                     dev_eui: Some(d.dev_eui.into()),
                     search: None,

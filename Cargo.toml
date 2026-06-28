@@ -10,7 +10,7 @@
   ]
 
   [workspace.package]
-    version = "4.17.0"
+    version = "4.19.0-test.5"
     homepage = "https://www.chirpstack.io"
     license = "MIT"
     authors = ["Orne Brocaar <info@brocaar.com>"]
@@ -27,7 +27,7 @@
     urlencoding = "2.1"
     serde_urlencoded = "0.7"
     humantime-serde = "1.1"
-    toml = { version = "1.0", default-features = false, features = [
+    toml = { version = "1.1", default-features = false, features = [
       "std",
       "parse",
       "serde",
@@ -36,15 +36,15 @@
     url = "2.5"
 
     # Crypto
-    cmac = "0.7"
-    aes = "0.8"
+    cmac = "0.8"
+    aes = "0.9"
     rand = "0.10"
     getrandom = "0.4"
-    aes-kw = "0.2"
-    hmac = "0.12"
-    sha2 = "0.10"
-    pbkdf2 = { version = "0.12", features = ["simple"] }
-    jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
+    aes-kw = "0.3"
+    hmac = "0.13"
+    sha2 = "0.11"
+    pbkdf2 = { version = "0.13", features = ["phc", "getrandom"] }
+    jsonwebtoken = { version = "10.4", features = ["rust_crypto"] }
     rustls = { version = "0.23", default-features = false, features = [
       "logging",
       "std",
@@ -56,7 +56,7 @@
     pem = "3.0"
     x509-parser = "0.18"
     rsa = "0.9"
-    sec1 = { version = "0.7", features = ["alloc", "pem", "pkcs8"] }
+    p256 = { version = "0.13" }
     rcgen = { version = "0.14", features = ["x509-parser"] }
     oauth2 = "5.0.0"
     openidconnect = { version = "4.0", features = [
@@ -66,12 +66,12 @@
     # Database
     diesel = "2.3"
     diesel_migrations = { version = "2.3" }
-    diesel-async = { version = "0.7", features = [
+    diesel-async = { version = "0.9", features = [
       "deadpool",
       "async-connection-wrapper",
     ] }
     tokio-postgres = { version = "0.7" }
-    tokio-postgres-rustls = { version = "0.13" }
+    tokio-postgres-rustls = { version = "0.14" }
     bigdecimal = "0.4"
     redis = { version = "1.0", features = ["tls-rustls", "tokio-rustls-comp"] }
     deadpool-redis = { version = "0.23", features = ["cluster", "serde"] }
@@ -94,14 +94,14 @@
     axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
     tower = { version = "0.5", features = ["util"] }
     tower-http = { version = "0.6", features = ["trace", "auth"] }
-    http = "1.3"
+    http = "1.4"
     http-body = "1.0"
 
     # Date & time
     chrono = { version = "0.4", features = ["serde"] }
 
     # Async
-    tokio = { version = "1.48", features = ["macros"] }
+    tokio = { version = "1.52", features = ["macros"] }
     tokio-executor-trait = "3.1"
     tokio-reactor-trait = "4.1"
     tokio-stream = "0.1"
@@ -109,7 +109,6 @@
     futures-util = "0.3"
     async-trait = "0.1"
     async-recursion = "1.1"
-    scoped-futures = { version = "0.1", features = ["std"] }
 
     # Testing
     httpmock = "0.8"
@@ -128,10 +127,10 @@
     tonic-reflection = "0.14"
 
     # CLI
-    clap = { version = "4.5", features = ["derive"] }
+    clap = { version = "4.6", features = ["derive"] }
 
     # Templating
-    handlebars = "6.3"
+    handlebars = "6.4"
 
     # Utilities
     validator = { version = "0.20", features = ["derive"] }
@@ -145,18 +144,18 @@
       "array-buffer",
       "chrono",
     ] }
-    uuid = { version = "1.18", features = ["v4", "serde"] }
-    regex = "1.11"
+    uuid = { version = "1.23", features = ["v4", "serde"] }
+    regex = "1.12"
     petgraph = "0.8"
     pin-project = "1.1"
     signal-hook = "0.4"
     signal-hook-tokio = { version = "0.4", features = ["futures-v0_3"] }
     bytes = "1.11"
-    rpassword = "7"
+    rpassword = "7.5"
     dotenv = "0.15"
 
     # Integrations
-    lapin = { version = "4.1", default-features = false, features = [
+    lapin = { version = "4.7", default-features = false, features = [
       "tokio",
       "rustls--ring",
       "rustls-native-certs",

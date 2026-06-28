@@ -13,11 +13,10 @@ use crate::api::helpers::{FromProto, ToProto};
 use crate::backend::roaming;
 use crate::downlink::{classb, error::Error, helpers, tx_ack};
 use crate::gpstime::{ToDateTime, ToGpsTime};
-use crate::storage;
 use crate::storage::{
-    application,
+    self, application,
     device::{self, DeviceClass},
-    device_gateway, device_profile, device_queue, downlink_frame,
+    device_profile, device_queue, downlink_frame,
     helpers::get_all_device_data,
     mac_command, relay, tenant,
 };
@@ -43,8 +42,7 @@ pub struct Data {
     must_send: bool,
     must_ack: bool,
     mac_commands: Vec<lrwn::MACCommandSet>,
-    device_gateway_rx_info: Option<internal::DeviceGatewayRxInfo>,
-    downlink_gateway: Option<internal::DeviceGatewayRxInfoItem>,
+    downlink_gateway: Option<internal::DownlinkGateway>,
     downlink_frame: gw::DownlinkFrame,
     downlink_frame_items: Vec<DownlinkFrameItem>,
     immediately: bool,
@@ -56,7 +54,6 @@ impl Data {
     #[allow(clippy::too_many_arguments)]
     pub async fn handle_response(
         ufs: UplinkFrameSet,
-        dev_gw_rx_info: internal::DeviceGatewayRxInfo,
         tenant: tenant::Tenant,
         application: application::Application,
         device_profile: device_profile::DeviceProfile,
@@ -71,7 +68,6 @@ impl Data {
         match Data::_handle_response(
             downlink_id,
             ufs,
-            dev_gw_rx_info,
             tenant,
             application,
             device_profile,
@@ -98,7 +94,6 @@ impl Data {
     pub async fn handle_response_relayed(
         relay_ctx: RelayContext,
         ufs: UplinkFrameSet,
-        dev_gw_rx_info: internal::DeviceGatewayRxInfo,
         tenant: tenant::Tenant,
         application: application::Application,
         device_profile: device_profile::DeviceProfile,
@@ -114,7 +109,6 @@ impl Data {
             downlink_id,
             relay_ctx,
             ufs,
-            dev_gw_rx_info,
             tenant,
             application,
             device_profile,
@@ -161,7 +155,6 @@ impl Data {
     async fn _handle_response(
         downlink_id: u32,
         ufs: UplinkFrameSet,
-        dev_gw_rx_info: internal::DeviceGatewayRxInfo,
         tenant: tenant::Tenant,
         application: application::Application,
         device_profile: device_profile::DeviceProfile,
@@ -194,7 +187,6 @@ impl Data {
             must_send,
             must_ack,
             mac_commands,
-            device_gateway_rx_info: Some(dev_gw_rx_info),
             downlink_gateway: None,
             downlink_frame: gw::DownlinkFrame {
                 downlink_id,
@@ -206,9 +198,9 @@ impl Data {
             more_device_queue_items: false,
         };
 
-        ctx.select_downlink_gateway()?;
+        ctx.select_downlink_gateway(true)?;
         ctx.set_tx_info()?;
-        ctx.get_next_device_queue_item().await?;
+        ctx.get_next_device_queue_item(true).await?;
         ctx.set_mac_commands().await?;
 
         if ctx._something_to_send() {
@@ -234,7 +226,6 @@ impl Data {
         downlink_id: u32,
         relay_ctx: RelayContext,
         ufs: UplinkFrameSet,
-        dev_gw_rx_info: internal::DeviceGatewayRxInfo,
         tenant: tenant::Tenant,
         application: application::Application,
         device_profile: device_profile::DeviceProfile,
@@ -266,7 +257,6 @@ impl Data {
             must_send,
             must_ack,
             mac_commands,
-            device_gateway_rx_info: Some(dev_gw_rx_info),
             downlink_gateway: None,
             downlink_frame: gw::DownlinkFrame {
                 downlink_id,
@@ -278,9 +268,9 @@ impl Data {
             more_device_queue_items: false,
         };
 
-        ctx.select_downlink_gateway()?;
+        ctx.select_downlink_gateway(true)?;
         ctx.set_tx_info_relayed()?;
-        ctx.get_next_device_queue_item().await?;
+        ctx.get_next_device_queue_item(true).await?;
         ctx.set_mac_commands().await?;
         if ctx._something_to_send() {
             ctx.set_phy_payloads()?;
@@ -301,7 +291,6 @@ impl Data {
         trace!("Handle schedule next-queue item flow");
 
         let (dev, app, ten, dp) = get_all_device_data(dev.dev_eui).await?;
-        let dev_gw = device_gateway::get_rx_info(&dev.dev_eui).await?;
         let (rc, rn) = {
             let ds = dev.get_device_session()?;
             (
@@ -322,7 +311,6 @@ impl Data {
             must_send: false,
             must_ack: false,
             mac_commands: vec![],
-            device_gateway_rx_info: Some(dev_gw),
             downlink_gateway: None,
             downlink_frame: gw::DownlinkFrame {
                 downlink_id,
@@ -334,7 +322,7 @@ impl Data {
             more_device_queue_items: false,
         };
 
-        ctx.select_downlink_gateway()?;
+        ctx.select_downlink_gateway(false)?;
         if ctx._is_class_c() {
             ctx.class_c_update_scheduler_run_after().await?;
             ctx.check_for_first_uplink()?;
@@ -348,7 +336,7 @@ impl Data {
         if ctx._is_class_a() {
             return Err(anyhow!("Invalid device-class"));
         }
-        ctx.get_next_device_queue_item().await?;
+        ctx.get_next_device_queue_item(false).await?;
         if ctx._something_to_send() {
             ctx.set_phy_payloads()?;
             ctx.update_device_queue_item().await?;
@@ -359,14 +347,23 @@ impl Data {
         Ok(())
     }
 
-    fn select_downlink_gateway(&mut self) -> Result<()> {
+    fn select_downlink_gateway(&mut self, class_a: bool) -> Result<()> {
         trace!("Selecting downlink gateway");
+
+        // Not needed when roaming.
+        if self._is_roaming() {
+            self.downlink_gateway = Some(Default::default());
+            return Ok(());
+        }
+
+        let ds = self.device.get_device_session()?;
 
         let gw_down = helpers::select_downlink_gateway(
             Some(self.tenant.id.into()),
-            &self.device.get_device_session()?.region_config_id,
+            &ds.region_config_id,
             self.network_conf.gateway_prefer_min_margin,
-            self.device_gateway_rx_info.as_mut().unwrap(),
+            &ds.gateway_rx_info_history,
+            class_a,
         )?;
 
         self.downlink_frame.gateway_id = hex::encode(&gw_down.gateway_id);
@@ -431,8 +428,22 @@ impl Data {
         Ok(())
     }
 
-    async fn get_next_device_queue_item(&mut self) -> Result<()> {
+    async fn get_next_device_queue_item(&mut self, is_response: bool) -> Result<()> {
         trace!("Getting next device queue-item");
+
+        // If this is a response, the device is operating as a Class-B enabled device and has the
+        // class_b_downlink_only flag set, we do not retrieve a downlink from the queue.
+        if is_response
+            && self
+                .device_profile
+                .class_b_params
+                .as_ref()
+                .map(|v| v.class_b_downlink_only)
+                .unwrap_or_default()
+            && self.device.enabled_class == DeviceClass::B
+        {
+            return Ok(());
+        }
 
         let ds = self.device.get_device_session()?;
 
@@ -696,11 +707,11 @@ impl Data {
     }
 
     fn _is_roaming(&self) -> bool {
-        self.uplink_frame_set
-            .as_ref()
-            .unwrap()
-            .roaming_meta_data
-            .is_some()
+        if let Some(uf) = self.uplink_frame_set.as_ref() {
+            uf.roaming_meta_data.is_some()
+        } else {
+            false
+        }
     }
 
     fn set_phy_payloads(&mut self) -> Result<()> {
@@ -2473,6 +2484,7 @@ impl Data {
     // as we need to calculate the ping_slot_ts for the tx_info.
     async fn set_tx_info_for_class_b_and_update_scheduler_run_after(&mut self) -> Result<()> {
         trace!("Setting tx-info for Class-B");
+        let conf = config::get();
         let ds = self.device.get_device_session()?;
 
         let gw_down = self.downlink_gateway.as_ref().unwrap();
@@ -2500,12 +2512,32 @@ impl Data {
         }
 
         // set timing
-        let now_gps_ts = Utc::now().to_gps_time() + chrono::Duration::try_seconds(1).unwrap();
+        let now_gps_ts = Utc::now().to_gps_time();
         let ping_slot_ts = classb::get_next_ping_slot_after(
-            now_gps_ts,
+            now_gps_ts + chrono::Duration::seconds(1),
             &self.device.get_dev_addr()?,
             ds.class_b_ping_slot_nb as usize,
         )?;
+        let advance_delta = (ping_slot_ts - now_gps_ts).to_std().unwrap_or_default();
+
+        if advance_delta > conf.network.scheduler.class_b_schedule_advance {
+            debug!(advance_delta = ?advance_delta, "Ping-slot too much in advance, updating device scheduler_run_after");
+            let scheduler_run_after =
+                Utc::now() + advance_delta - conf.network.scheduler.class_b_schedule_advance;
+
+            let _ = device::partial_update(
+                self.device.dev_eui,
+                &device::DeviceChangeset {
+                    scheduler_run_after: Some(Some(scheduler_run_after)),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+            // Terminate the flow.
+            return Err(Error::Abort.into());
+        }
+
         trace!(gps_time_now_ts = %now_gps_ts, ping_slot_ts = %ping_slot_ts, "Calculated ping-slot timestamp");
         tx_info.timing = Some(gw::Timing {
             parameters: Some(gw::timing::Parameters::GpsEpoch(gw::GpsEpochTimingInfo {
@@ -2658,16 +2690,18 @@ fn filter_mac_commands(
     .collect();
 
     let mut filtered_mac_commands: Vec<lrwn::MACCommandSet> = Vec::new();
+    let conf = config::get();
+    let max_mac_command_error_count = conf.network.max_mac_command_error_count;
 
     'outer: for mac_command_set in mac_commands {
         for mac_command in &**mac_command_set {
-            // Check if it doesn't exceed the max error error count.
+            // Check if it doesn't exceed the max error count.
             if device_session
                 .mac_command_error_count
                 .get(&(mac_command.cid().to_u8() as u32))
                 .cloned()
                 .unwrap_or_default()
-                > 1
+                > max_mac_command_error_count
             {
                 continue 'outer;
             }
@@ -2962,7 +2996,6 @@ mod test {
                 must_send: false,
                 must_ack: false,
                 mac_commands: vec![],
-                device_gateway_rx_info: None,
                 downlink_gateway: None,
                 downlink_frame: Default::default(),
                 downlink_frame_items: vec![DownlinkFrameItem {
@@ -2974,7 +3007,7 @@ mod test {
                 more_device_queue_items: false,
             };
 
-            ctx.get_next_device_queue_item().await.unwrap();
+            ctx.get_next_device_queue_item(false).await.unwrap();
 
             // Integrations are handled async.
             sleep(Duration::from_millis(100)).await;
@@ -3532,7 +3565,6 @@ mod test {
                 must_send: false,
                 must_ack: false,
                 mac_commands: vec![],
-                device_gateway_rx_info: None,
                 downlink_gateway: None,
                 downlink_frame: Default::default(),
                 downlink_frame_items: vec![],
@@ -3984,7 +4016,6 @@ mod test {
                 must_send: false,
                 must_ack: false,
                 mac_commands: vec![],
-                device_gateway_rx_info: None,
                 downlink_gateway: None,
                 downlink_frame: Default::default(),
                 downlink_frame_items: vec![],
@@ -4110,7 +4141,6 @@ mod test {
                 must_send: false,
                 must_ack: false,
                 mac_commands: vec![],
-                device_gateway_rx_info: None,
                 downlink_gateway: None,
                 downlink_frame: Default::default(),
                 downlink_frame_items: vec![],
@@ -4227,7 +4257,6 @@ mod test {
                 must_send: false,
                 must_ack: false,
                 mac_commands: vec![],
-                device_gateway_rx_info: None,
                 downlink_gateway: None,
                 downlink_frame: Default::default(),
                 downlink_frame_items: vec![],
@@ -4354,7 +4383,6 @@ mod test {
                 must_send: false,
                 must_ack: false,
                 mac_commands: vec![],
-                device_gateway_rx_info: None,
                 downlink_gateway: None,
                 downlink_frame: Default::default(),
                 downlink_frame_items: vec![],
@@ -4625,7 +4653,6 @@ mod test {
                 must_send: false,
                 must_ack: false,
                 mac_commands: vec![],
-                device_gateway_rx_info: None,
                 downlink_gateway: None,
                 downlink_frame: Default::default(),
                 downlink_frame_items: vec![],

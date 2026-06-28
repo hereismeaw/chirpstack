@@ -19,7 +19,7 @@ use tracing::{error, info, trace, warn};
 
 use super::Integration as IntegrationTrait;
 use crate::config::MqttIntegration as Config;
-use crate::helpers::tls22::{get_root_certs, load_cert, load_key};
+use crate::helpers::tls::{get_root_certs, load_cert, load_key};
 use chirpstack_api::integration;
 
 pub struct Integration<'a> {
@@ -124,7 +124,7 @@ impl<'a> Integration<'a> {
             mqtt_opts.set_transport(Transport::tls_with_config(client_conf.into()));
         }
 
-        let (client, mut eventloop) = AsyncClient::new(mqtt_opts, 100);
+        let (client, mut eventloop) = AsyncClient::new(mqtt_opts, conf.channel_capacity);
 
         let i = Integration {
             command_regex: Regex::new(&templates.render(

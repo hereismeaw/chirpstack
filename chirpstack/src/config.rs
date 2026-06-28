@@ -142,6 +142,7 @@ pub struct Gateway {
     pub allow_unknown_gateways: bool,
     #[serde(with = "humantime_serde")]
     pub rx_timestamp_max_drift: Duration,
+    pub device_gateway_mapping_history_uplinks: usize,
 }
 
 impl Default for Gateway {
@@ -152,6 +153,7 @@ impl Default for Gateway {
             ca_key: "".to_string(),
             allow_unknown_gateways: false,
             rx_timestamp_max_drift: Duration::from_secs(30),
+            device_gateway_mapping_history_uplinks: 1,
         }
     }
 }
@@ -171,6 +173,7 @@ pub struct Network {
     pub get_downlink_data_delay: Duration,
     pub mac_commands_disabled: bool,
     pub adr_plugins: Vec<String>,
+    pub max_mac_command_error_count: u32,
     pub scheduler: Scheduler,
 }
 
@@ -186,7 +189,18 @@ impl Default for Network {
             get_downlink_data_delay: Duration::from_millis(100),
             mac_commands_disabled: false,
             adr_plugins: vec![],
+            max_mac_command_error_count: 1,
             scheduler: Default::default(),
+        }
+    }
+}
+
+impl Network {
+    pub fn get_dev_addr_prefixes(&self) -> Vec<DevAddrPrefix> {
+        if self.dev_addr_prefixes.is_empty() {
+            vec![self.net_id.dev_addr_prefix()]
+        } else {
+            self.dev_addr_prefixes.clone()
         }
     }
 }
@@ -207,6 +221,8 @@ pub struct Scheduler {
     pub multicast_class_c_margin: Duration,
     #[serde(with = "humantime_serde")]
     pub multicast_class_b_margin: Duration,
+    #[serde(with = "humantime_serde")]
+    pub class_b_schedule_advance: Duration,
 }
 
 impl Default for Scheduler {
@@ -219,6 +235,7 @@ impl Default for Scheduler {
             scheduler_lock_duration: Duration::from_secs(2),
             multicast_class_c_margin: Duration::from_secs(5),
             multicast_class_b_margin: Duration::from_secs(5),
+            class_b_schedule_advance: Duration::from_secs(5),
         }
     }
 }
@@ -293,6 +310,7 @@ pub struct MqttIntegration {
     #[serde(with = "humantime_serde")]
     pub keep_alive_interval: Duration,
     pub share_name: String,
+    pub channel_capacity: usize,
 }
 
 impl Default for MqttIntegration {
@@ -314,6 +332,7 @@ impl Default for MqttIntegration {
             tls_key: "".into(),
             keep_alive_interval: Duration::from_secs(30),
             share_name: "chirpstack".into(),
+            channel_capacity: 100,
         }
     }
 }
@@ -753,6 +772,7 @@ pub struct GatewayBackendMqtt {
     pub keep_alive_interval: Duration,
     pub v4_migrate: bool,
     pub share_name: String,
+    pub channel_capacity: usize,
 }
 
 impl Default for GatewayBackendMqtt {
@@ -773,6 +793,7 @@ impl Default for GatewayBackendMqtt {
             keep_alive_interval: Duration::from_secs(30),
             v4_migrate: false,
             share_name: "chirpstack".into(),
+            channel_capacity: 100,
         }
     }
 }

@@ -306,6 +306,7 @@ diesel::table! {
         tls_certificate -> Nullable<Bytea>,
         tags -> Jsonb,
         properties -> Jsonb,
+        downlink_priority -> Int2,
     }
 }
 
@@ -402,6 +403,7 @@ diesel::table! {
         private_gateways_up -> Bool,
         private_gateways_down -> Bool,
         tags -> Jsonb,
+        dev_addr_prefixes -> Array<Nullable<Text>>,
     }
 }
 

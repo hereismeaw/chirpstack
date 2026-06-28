@@ -278,6 +278,7 @@ diesel::table! {
         tls_certificate -> Nullable<Binary>,
         tags -> Text,
         properties -> Text,
+        downlink_priority -> SmallInt,
     }
 }
 
@@ -367,6 +368,7 @@ diesel::table! {
         private_gateways_up -> Bool,
         private_gateways_down -> Bool,
         tags -> Text,
+        dev_addr_prefixes -> Text,
     }
 }
 

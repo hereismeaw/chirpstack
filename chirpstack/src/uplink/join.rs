@@ -516,8 +516,10 @@ impl JoinRequest {
 
     fn set_random_dev_addr(&mut self) -> Result<()> {
         trace!("Setting random DevAddr");
+        let tenant = self.tenant.as_ref().unwrap();
         let d = self.device.as_mut().unwrap();
-        d.dev_addr = Some(get_random_dev_addr());
+        d.dev_addr = Some(get_random_dev_addr(&tenant.get_dev_addr_prefixes()));
+
         Ok(())
     }
 
@@ -902,25 +904,25 @@ impl JoinRequest {
         Ok(())
     }
 
-    async fn start_downlink_join_accept_flow(&self) -> Result<()> {
+    async fn start_downlink_join_accept_flow(&mut self) -> Result<()> {
         trace!("Starting downlink join-accept flow");
         downlink::join::JoinAccept::handle(
             &self.uplink_frame_set,
             self.tenant.as_ref().unwrap(),
-            self.device.as_ref().unwrap(),
+            self.device.as_mut().unwrap(),
             self.join_accept.as_ref().unwrap(),
         )
         .await?;
         Ok(())
     }
 
-    async fn start_downlink_join_accept_flow_relayed(&self) -> Result<()> {
+    async fn start_downlink_join_accept_flow_relayed(&mut self) -> Result<()> {
         trace!("Starting relayed downlink join-accept flow");
         downlink::join::JoinAccept::handle_relayed(
             self.relay_context.as_ref().unwrap(),
             &self.uplink_frame_set,
             self.tenant.as_ref().unwrap(),
-            self.device.as_ref().unwrap(),
+            self.device.as_mut().unwrap(),
             self.join_accept.as_ref().unwrap(),
         )
         .await?;

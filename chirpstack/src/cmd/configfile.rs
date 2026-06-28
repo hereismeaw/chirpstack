@@ -21,7 +21,7 @@ pub fn run() {
   json={{ logging.json }}
   
   # Flatten JSON logs
-  json={{ logging.flatten_json }}
+  flatten_json={{ logging.flatten_json }}
 
 
 # PostgreSQL configuration.
@@ -51,6 +51,18 @@ pub fn run() {
   # the server-certificate is not signed by a CA in the platform certificate
   # store.
   ca_cert="{{ postgresql.ca_cert }}"
+
+  # Connection recycling method.
+  #
+  # This controls how connections are validated when returned to the connection pool.
+  # Options:
+  #  * verified - Run a validation query (SELECT 1) when recycling connections (safer, slightly slower)
+  #  * fast - Skip validation query when recycling connections (faster, but may return stale connections)
+  #
+  # The 'verified' method is recommended for production use to ensure connection health.
+  # Use 'fast' when using an external connection pooler (PgBouncer, AWS RDS Proxy,
+  # GCP Cloud SQL Connection Pooling) that already handles connection validation.
+  connection_recycling_method = "{{ postgresql.connection_recycling_method }}"
 
 
 # SQLite configuration.
@@ -178,6 +190,19 @@ pub fn run() {
   # server time.
   rx_timestamp_max_drift="{{ gateway.rx_timestamp_max_drift }}"
 
+  # Device <> Gateway mapping history.
+  #
+  # This defines the gateway meta-data per uplink that ChirpStack keeps per
+  # device. Excluding Class-A (in which case ChirpStack must use one of the
+  # uplink receiving gateways), this history is used to determine the best
+  # downlink path. When selecting the downlink path, ChirpStack will prefer
+  # gatewways that occur more often in the kept history over gateway that
+  # occur less often.
+  #
+  # The configured number defines the number of uplinks for which ChirpStack
+  # stores the gateway meta-data.
+  device_gateway_mapping_history_uplinks={{gateway.device_gateway_mapping_history_uplinks}}
+
 
 # Network related configuration.
 [network]
@@ -260,6 +285,13 @@ pub fn run() {
     {{/each}}
   ]
 
+  # Max mac-command error count.
+  #
+  # When a mac-command is nACKed for more than the configured value, then
+  # ChirpStack will stop sending this mac-command to the device. This setting
+  # prevents that Chirpstack will keep sending mac-commands on every downlink
+  # in case of a malfunctioning device.
+  max_mac_command_error_count={{ network.max_mac_command_error_count }}
 
   # Scheduler settings.
   [network.scheduler]
@@ -305,6 +337,13 @@ pub fn run() {
     # (within the same multicast-group). This value must be equal or greater than the
     # scheduler interval.
     multicast_class_b_margin="{{ network.scheduler.multicast_class_b_margin }}"
+
+    # Class-B schedule advance.
+    #
+    # This defines how much time in advance a Class-B downlink item is sent to the gateway
+    # before its ping-slot. Setting this too much in advance can cause frame-counter
+    # isses when a Class-A downlink is sent before an already scheduled Class-B ping-slot.
+    class_b_schedule_advance="{{ network.scheduler.class_b_schedule_advance }}"
 
 
 # Monitoring related configuration.
@@ -469,6 +508,14 @@ pub fn run() {
 
     # TLS key file (PKCS#8) (optional)
     tls_key="{{ integration.mqtt.tls_key }}"
+
+    # Channel capacity.
+    #
+    # This defines the size of the MQTT client channel capacity. This channel
+    # is the buffer in which the client stores the incoming messages before
+    # these are consumed from the channel by ChirpStack. Under very high load,
+    # or when dealing with peaks, you might want to increase this value.
+    channel_capacity={{ integration.mqtt.channel_capacity }}
 
 
     # Configuration for MQTT clients.
@@ -789,12 +836,6 @@ pub fn run() {
       #
       # If set, this will bypass the DNS resolving of the server.
       server="{{join_server.default.server}}"
- 
-      # Use target role suffix.
-      #
-      # Depending the context of the remote server, this will add
-      # the /sns or /fns path to the server endpoint.
-      use_target_role_suffix={{join_server.default.use_target_role_suffix}}
  
       # CA certificate (path).
       ca_cert="{{join_server.default.ca_cert}}"

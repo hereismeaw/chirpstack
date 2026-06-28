@@ -107,7 +107,7 @@
   pem.workspace = true
   x509-parser.workspace = true
   rsa.workspace = true
-  sec1.workspace = true
+  p256.workspace = true
   rcgen.workspace = true
   oauth2.workspace = true
   openidconnect.workspace = true
@@ -131,7 +131,6 @@
   petgraph.workspace = true
   prometheus-client.workspace = true
   pin-project.workspace = true
-  scoped-futures.workspace = true
   signal-hook.workspace = true
   signal-hook-tokio.workspace = true
   rpassword.workspace = true
