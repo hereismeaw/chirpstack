@@ -65,7 +65,11 @@ impl GatewayService for Gateway {
             altitude: alt,
             tags: fields::KeyValue::new(req_gw.tags.clone()),
             stats_interval_secs: req_gw.stats_interval as i32,
-            downlink_priority: req_gw.downlink_priority as i16,
+            downlink_priority: if req_gw.downlink_priority == 0 {
+                10
+            } else {
+                req_gw.downlink_priority
+            } as i16,
             ..Default::default()
         };
 
@@ -855,7 +859,7 @@ impl GatewayService for Gateway {
         self.validator
             .validate(
                 request.extensions(),
-                validator::ValidateGatewaysAccess::new(validator::Flag::List, tenant_id),
+                validator::ValidateGatewaysAccess::new(validator::Flag::Create, tenant_id),
             )
             .await?;
 
@@ -892,7 +896,7 @@ impl GatewayService for Gateway {
         self.validator
             .validate(
                 request.extensions(),
-                validator::ValidateGatewaysAccess::new(validator::Flag::List, tenant_id),
+                validator::ValidateGatewaysAccess::new(validator::Flag::Create, tenant_id),
             )
             .await?;
 

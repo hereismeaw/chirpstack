@@ -11,10 +11,10 @@ use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prost::Message;
 use rand::RngExt;
-use rumqttc::Transport;
-use rumqttc::tokio_rustls::rustls;
-use rumqttc::v5::mqttbytes::v5::{ConnectReturnCode, Publish};
-use rumqttc::v5::{AsyncClient, Event, Incoming, MqttOptions, mqttbytes::QoS};
+use rumqttc::{
+    AsyncClient, ConnectReturnCode, Event, Incoming, MqttOptions, Publish, PublishOptions, QoS,
+    SubscribeReasonCode, Transport, tokio_rustls::rustls,
+};
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
@@ -112,19 +112,20 @@ impl<'a> MqttBackend<'a> {
             _ => return Err(anyhow!("Invalid QoS: {}", conf.qos)),
         };
 
-        // Create connect channel
+        // Create subscribe channel.
         // We need to re-subscribe on (re)connect to be sure we have a subscription. Even
         // in case of a persistent MQTT session, there is no guarantee that the MQTT persisted the
         // session and that a re-connect would recover the subscription.
-        let (connect_tx, mut connect_rx) = mpsc::channel(10);
+        let (subscribe_tx, mut subscribe_rx) = mpsc::channel(10);
 
         // Create client
         let mut mqtt_opts =
             MqttOptions::parse_url(format!("{}?client_id={}", conf.server, client_id))?;
         mqtt_opts.set_clean_start(conf.clean_session);
-        mqtt_opts.set_keep_alive(conf.keep_alive_interval);
+        mqtt_opts.set_session_expiry_interval(Some(conf.session_expiry_interval.as_secs() as u32));
+        mqtt_opts.set_keep_alive(conf.keep_alive_interval.as_secs() as u16);
         if !conf.username.is_empty() || !conf.password.is_empty() {
-            mqtt_opts.set_credentials(&conf.username, &conf.password);
+            mqtt_opts.set_credentials(&conf.username, conf.password.clone());
         }
 
         if !conf.ca_cert.is_empty() || !conf.tls_cert.is_empty() || !conf.tls_key.is_empty() {
@@ -155,7 +156,9 @@ impl<'a> MqttBackend<'a> {
             mqtt_opts.set_transport(Transport::tls_with_config(client_conf.into()));
         }
 
-        let (client, mut eventloop) = AsyncClient::new(mqtt_opts, conf.channel_capacity);
+        let (client, mut eventloop) = AsyncClient::builder(mqtt_opts)
+            .capacity(conf.channel_capacity)
+            .build();
 
         let b = MqttBackend {
             client,
@@ -186,16 +189,22 @@ impl<'a> MqttBackend<'a> {
             let share_name = conf.share_name.clone();
 
             async move {
-                while let Some(shared_sub_support) = connect_rx.recv().await {
+                while let Some(shared_sub_support) = subscribe_rx.recv().await {
                     let event_topic = if shared_sub_support {
                         format!("$share/{}/{}", share_name, event_topic)
                     } else {
                         event_topic.clone()
                     };
 
-                    info!(region_id = %region_config_id, event_topic = %event_topic, "Subscribing to gateway event topic");
-                    if let Err(e) = client.subscribe(&event_topic, qos).await {
-                        error!(region_id = %region_config_id, event_topic = %event_topic, error = %e, "MQTT subscribe error");
+                    loop {
+                        info!(region_id = %region_config_id, event_topic = %event_topic, "Subscribing to gateway event topic");
+                        if let Err(e) = client.subscribe(&event_topic, qos).await {
+                            error!(region_id = %region_config_id, event_topic = %event_topic, error = %e, "MQTT subscribe error");
+                        } else {
+                            break;
+                        }
+
+                        sleep(Duration::from_secs(1)).await;
                     }
                 }
             }
@@ -208,6 +217,7 @@ impl<'a> MqttBackend<'a> {
 
             async move {
                 info!("Starting MQTT event loop");
+                let mut shared_sub_support = false;
 
                 loop {
                     match eventloop.poll().await {
@@ -228,7 +238,7 @@ impl<'a> MqttBackend<'a> {
                                     if v.code == ConnectReturnCode::Success {
                                         // Per specification:
                                         // A value of 1 means Shared Subscriptions are supported. If not present, then Shared Subscriptions are supported.
-                                        let shared_sub_support = v
+                                        shared_sub_support = v
                                             .properties
                                             .map(|v| {
                                                 v.shared_subscription_available
@@ -237,12 +247,28 @@ impl<'a> MqttBackend<'a> {
                                             })
                                             .unwrap_or(true);
 
-                                        if let Err(e) = connect_tx.try_send(shared_sub_support) {
+                                        if let Err(e) = subscribe_tx.try_send(shared_sub_support) {
                                             error!(error = %e, "Send to subscribe channel error");
                                         }
                                     } else {
                                         error!(code = ?v.code, "Connection error");
                                         sleep(Duration::from_secs(1)).await
+                                    }
+                                }
+                                Event::Incoming(Incoming::SubAck(v)) => {
+                                    let errors: Vec<SubscribeReasonCode> = v
+                                        .return_codes
+                                        .iter()
+                                        .filter(|v| !matches!(v, SubscribeReasonCode::Success(_)))
+                                        .cloned()
+                                        .collect();
+
+                                    if !errors.is_empty() {
+                                        error!(errors = ?errors, "Subscribe ack returned errors");
+
+                                        if let Err(e) = subscribe_tx.try_send(shared_sub_support) {
+                                            error!(error = %e, "Send to subscribe channel error");
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -294,7 +320,9 @@ impl GatewayBackend for MqttBackend<'_> {
         };
 
         info!(region_id = %self.region_config_id, gateway_id = %df.gateway_id, topic = %topic, json = json, "Sending downlink frame");
-        self.client.publish(topic, self.qos, false, b).await?;
+        self.client
+            .publish(topic, b, PublishOptions::new(self.qos))
+            .await?;
         trace!("Message published");
 
         Ok(())
@@ -317,7 +345,9 @@ impl GatewayBackend for MqttBackend<'_> {
         };
 
         info!(region_id = %self.region_config_id, gateway_id = %gw_conf.gateway_id, topic = %topic, json = json, "Sending gateway configuration");
-        self.client.publish(topic, self.qos, false, b).await?;
+        self.client
+            .publish(topic, b, PublishOptions::new(self.qos))
+            .await?;
         trace!("Message published");
 
         Ok(())

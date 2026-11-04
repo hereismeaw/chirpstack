@@ -8,10 +8,10 @@ use handlebars::Handlebars;
 use prost::Message;
 use rand::RngExt;
 use regex::Regex;
-use rumqttc::Transport;
-use rumqttc::tokio_rustls::rustls;
-use rumqttc::v5::mqttbytes::v5::{ConnectReturnCode, Publish};
-use rumqttc::v5::{AsyncClient, Event, Incoming, MqttOptions, mqttbytes::QoS};
+use rumqttc::{
+    AsyncClient, ConnectReturnCode, Event, Incoming, MqttOptions, Publish, PublishOptions, QoS,
+    SubscribeReasonCode, Transport, tokio_rustls::rustls,
+};
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
@@ -81,19 +81,20 @@ impl<'a> Integration<'a> {
             _ => return Err(anyhow!("Invalid QoS: {}", conf.qos)),
         };
 
-        // Create connect channel
+        // Create subscribe channel.
         // We need to re-subscribe on (re)connect to be sure we have a subscription. Even
         // in case of a persistent MQTT session, there is no guarantee that the MQTT persisted the
         // session and that a re-connect would recover the subscription.
-        let (connect_tx, mut connect_rx) = mpsc::channel(10);
+        let (subscribe_tx, mut subscribe_rx) = mpsc::channel(10);
 
         // Create client
         let mut mqtt_opts =
             MqttOptions::parse_url(format!("{}?client_id={}", conf.server, client_id))?;
         mqtt_opts.set_clean_start(conf.clean_session);
-        mqtt_opts.set_keep_alive(conf.keep_alive_interval);
+        mqtt_opts.set_session_expiry_interval(Some(conf.session_expiry_interval.as_secs() as u32));
+        mqtt_opts.set_keep_alive(conf.keep_alive_interval.as_secs() as u16);
         if !conf.username.is_empty() || !conf.password.is_empty() {
-            mqtt_opts.set_credentials(&conf.username, &conf.password);
+            mqtt_opts.set_credentials(&conf.username, conf.password.clone());
         }
 
         if !conf.ca_cert.is_empty() || !conf.tls_cert.is_empty() || !conf.tls_key.is_empty() {
@@ -124,7 +125,9 @@ impl<'a> Integration<'a> {
             mqtt_opts.set_transport(Transport::tls_with_config(client_conf.into()));
         }
 
-        let (client, mut eventloop) = AsyncClient::new(mqtt_opts, conf.channel_capacity);
+        let (client, mut eventloop) = AsyncClient::builder(mqtt_opts)
+            .capacity(conf.channel_capacity)
+            .build();
 
         let i = Integration {
             command_regex: Regex::new(&templates.render(
@@ -142,7 +145,7 @@ impl<'a> Integration<'a> {
         };
 
         // connect
-        info!(server_uri = %conf.server, client_id = %client_id, clean_session = conf.clean_session, "Connecting to MQTT broker");
+        info!(server_uri = %conf.server, client_id = %client_id, clean_session = conf.clean_session, session_expiry_interval = %conf.session_expiry_interval.as_secs(), "Connecting to MQTT broker");
 
         // (Re)subscribe loop
         tokio::spawn({
@@ -151,16 +154,22 @@ impl<'a> Integration<'a> {
             let share_name = conf.share_name.clone();
 
             async move {
-                while let Some(shared_sub_support) = connect_rx.recv().await {
+                while let Some(shared_sub_support) = subscribe_rx.recv().await {
                     let command_topic = if shared_sub_support {
                         format!("$share/{}/{}", share_name, command_topic)
                     } else {
                         command_topic.clone()
                     };
 
-                    info!(command_topic = %command_topic, "Subscribing to command topic");
-                    if let Err(e) = client.subscribe(&command_topic, qos).await {
-                        error!(error = %e, "Subscribe to command topic error");
+                    loop {
+                        info!(command_topic = %command_topic, "Subscribing to command topic");
+                        if let Err(e) = client.subscribe(&command_topic, qos).await {
+                            error!(error = %e, "Subscribe to command topic error");
+                        } else {
+                            break;
+                        }
+
+                        sleep(Duration::from_secs(1)).await;
                     }
                 }
             }
@@ -173,6 +182,7 @@ impl<'a> Integration<'a> {
 
             async move {
                 info!("Starting MQTT event loop");
+                let mut shared_sub_support = false;
 
                 loop {
                     match eventloop.poll().await {
@@ -208,7 +218,7 @@ impl<'a> Integration<'a> {
                                     if v.code == ConnectReturnCode::Success {
                                         // Per specification:
                                         // A value of 1 means Shared Subscriptions are supported. If not present, then Shared Subscriptions are supported.
-                                        let shared_sub_support = v
+                                        shared_sub_support = v
                                             .properties
                                             .map(|v| {
                                                 v.shared_subscription_available
@@ -217,12 +227,28 @@ impl<'a> Integration<'a> {
                                             })
                                             .unwrap_or(true);
 
-                                        if let Err(e) = connect_tx.try_send(shared_sub_support) {
+                                        if let Err(e) = subscribe_tx.try_send(shared_sub_support) {
                                             error!(error = %e, "Send to subscribe channel error");
                                         }
                                     } else {
                                         error!(code = ?v.code, "Connection error");
                                         sleep(Duration::from_secs(1)).await
+                                    }
+                                }
+                                Event::Incoming(Incoming::SubAck(v)) => {
+                                    let errors: Vec<SubscribeReasonCode> = v
+                                        .return_codes
+                                        .iter()
+                                        .filter(|v| !matches!(v, SubscribeReasonCode::Success(_)))
+                                        .cloned()
+                                        .collect();
+
+                                    if !errors.is_empty() {
+                                        error!(errors = ?errors, "Subscribe ack returned errors");
+
+                                        if let Err(e) = subscribe_tx.try_send(shared_sub_support) {
+                                            error!(error = %e, "Send to subscribe channel error");
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -254,7 +280,9 @@ impl<'a> Integration<'a> {
 
     async fn publish_event(&self, topic: &str, b: Vec<u8>) -> Result<()> {
         info!(topic = %topic, "Publishing event");
-        self.client.publish(topic, self.qos, false, b).await?;
+        self.client
+            .publish(topic, b, PublishOptions::new(self.qos))
+            .await?;
         Ok(())
     }
 }
@@ -496,6 +524,7 @@ pub mod test {
             json: true,
             server: env::var("TEST_MOSQUITTO_SERVER").unwrap(),
             clean_session: true,
+            session_expiry_interval: Duration::from_secs(3600),
             ..Default::default()
         };
         let i = Integration::new(&conf).await.unwrap();
@@ -503,7 +532,7 @@ pub mod test {
         let mut mqtt_opts =
             MqttOptions::parse_url(format!("{}?client_id=chirpstack_test", &conf.server)).unwrap();
         mqtt_opts.set_clean_start(true);
-        let (client, mut eventloop) = AsyncClient::new(mqtt_opts, 100);
+        let (client, mut eventloop) = AsyncClient::builder(mqtt_opts).capacity(100).build();
         let (mqtt_tx, mut mqtt_rx) = mpsc::channel(100);
 
         tokio::spawn({
@@ -530,7 +559,7 @@ pub mod test {
             .await
             .unwrap();
 
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(200)).await;
 
         // uplink event
         let pl = integration::UplinkEvent {
@@ -686,9 +715,8 @@ pub mod test {
         client
             .publish(
                 format!("application/{}/device/{}/command/down", app.id, dev.dev_eui),
-                QoS::AtLeastOnce,
-                false,
                 down_cmd_json,
+                PublishOptions::new(QoS::AtLeastOnce),
             )
             .await
             .unwrap();

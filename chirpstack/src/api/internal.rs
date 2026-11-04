@@ -174,7 +174,13 @@ impl InternalService for Internal {
         };
 
         let u = user::get(id).await.map_err(|e| e.status())?;
-        let items = tenant::get_tenant_users_for_user(id)
+        let tenants = tenant::get_tenant_users_for_user(id)
+            .await
+            .map_err(|e| e.status())?;
+        let device_profiles = tenant::get_tenant_user_device_profiles_for_user(*id)
+            .await
+            .map_err(|e| e.status())?;
+        let applications = tenant::get_tenant_user_applications_for_user(*id)
             .await
             .map_err(|e| e.status())?;
 
@@ -186,7 +192,7 @@ impl InternalService for Internal {
                 is_admin: u.is_admin,
                 note: u.note,
             }),
-            tenants: items
+            tenants: tenants
                 .iter()
                 .map(|i| api::UserTenantLink {
                     created_at: Some(helpers::datetime_to_prost_timestamp(&i.created_at)),
@@ -195,6 +201,21 @@ impl InternalService for Internal {
                     is_admin: i.is_admin,
                     is_device_admin: i.is_device_admin,
                     is_gateway_admin: i.is_gateway_admin,
+                })
+                .collect(),
+            device_profiles: device_profiles
+                .iter()
+                .map(|dp| api::UserDeviceProfileLink {
+                    created_at: Some(helpers::datetime_to_prost_timestamp(&dp.created_at)),
+                    device_profile_id: dp.device_profile_id.to_string(),
+                })
+                .collect(),
+            applications: applications
+                .iter()
+                .map(|a| api::UserApplicationLink {
+                    created_at: Some(helpers::datetime_to_prost_timestamp(&a.created_at)),
+                    application_id: a.application_id.to_string(),
+                    is_read_only: a.is_read_only,
                 })
                 .collect(),
         }))
@@ -702,7 +723,8 @@ impl InternalService for Internal {
         let (redis_tx, mut redis_rx) = mpsc::channel(1);
         let (stream_tx, stream_rx) = mpsc::channel(1);
 
-        let mut framelog_future = Box::pin(stream::frame::get_frame_logs(key, 10, redis_tx));
+        let count = config::get().monitoring.gateway_frame_log_read_batch_size;
+        let mut framelog_future = Box::pin(stream::frame::get_frame_logs(key, count, redis_tx));
         let (drop_receiver, mut close_rx) = DropReceiver::new(ReceiverStream::new(stream_rx));
 
         tokio::spawn(async move {
@@ -769,7 +791,8 @@ impl InternalService for Internal {
         let (redis_tx, mut redis_rx) = mpsc::channel(1);
         let (stream_tx, stream_rx) = mpsc::channel(1);
 
-        let mut framelog_future = Box::pin(stream::frame::get_frame_logs(key, 10, redis_tx));
+        let count = config::get().monitoring.device_frame_log_read_batch_size;
+        let mut framelog_future = Box::pin(stream::frame::get_frame_logs(key, count, redis_tx));
         let (drop_receiver, mut close_rx) = DropReceiver::new(ReceiverStream::new(stream_rx));
 
         tokio::spawn(async move {
@@ -837,7 +860,8 @@ impl InternalService for Internal {
         let (redis_tx, mut redis_rx) = mpsc::channel(1);
         let (stream_tx, stream_rx) = mpsc::channel(1);
 
-        let mut eventlog_future = Box::pin(stream::event::get_event_logs(key, 10, redis_tx));
+        let count = config::get().monitoring.device_event_log_read_batch_size;
+        let mut eventlog_future = Box::pin(stream::event::get_event_logs(key, count, redis_tx));
         let (drop_receiver, mut close_rx) = DropReceiver::new(ReceiverStream::new(stream_rx));
 
         tokio::spawn(async move {
