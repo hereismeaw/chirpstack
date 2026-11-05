@@ -39,6 +39,11 @@ pub async fn endpoint(
         app.tenant_id == gw.tenant_id,
         "MIOTY gateway and endpoint belong to different tenants"
     );
+    let profile = device_profile::get(&dev.device_profile_id).await?;
+    anyhow::ensure!(
+        profile.tenant_id.is_none_or(|id| id == app.tenant_id),
+        "MIOTY device profile belongs to a different tenant"
+    );
     Ok((dev, mioty::get(eui).await?))
 }
 
@@ -67,6 +72,7 @@ pub async fn device_info(dev: &device::Device) -> Result<events::DeviceInfo> {
 pub async fn receive(
     gw: &gateway::Gateway,
     value: &Value,
+    lease: Option<&crate::storage::mioty_session::Lease>,
 ) -> Result<Option<(mioty::Endpoint, u32, bool)>> {
     let eui = eui(value)?;
     let (dev, ep) = endpoint(gw, eui).await?;
@@ -177,7 +183,7 @@ pub async fn receive(
         ..Default::default()
     };
     let ready_at = Utc::now() + chrono::Duration::from_std(delay)?;
-    if !mioty::accept_event(
+    if !mioty::accept_event_with_lease(
         &ep,
         counter,
         gw.gateway_id,
@@ -192,6 +198,7 @@ pub async fn receive(
             rx_key: Some(redis_key),
         },
         time,
+        lease,
     )
     .await?
     {

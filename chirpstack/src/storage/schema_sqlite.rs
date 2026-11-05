@@ -453,6 +453,7 @@ diesel::joinable!(tenant_user_device_profile -> user (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     mioty_device,
+    mioty_gateway_session,
     mioty_downlink,
     mioty_event,
     api_key,
@@ -523,5 +524,14 @@ diesel::table! {
         lease_until -> TimestamptzSqlite,
         kind -> Text,
         rx_key -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    mioty_gateway_session (gateway_id) {
+        gateway_id -> Binary,
+        owner -> Text,
+        expires_at -> TimestamptzSqlite,
+        revision -> BigInt,
     }
 }

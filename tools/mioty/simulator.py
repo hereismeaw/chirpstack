@@ -131,7 +131,7 @@ def state_lock(path):
 
 
 class Peer:
-    def __init__(self, args, state, stats):
+    def __init__(self, args, state, stats, previous=None):
         self.args, self.state, self.stats = args, state, stats
         self.codec = Codec(args.encoding)
         self.reader = self.writer = self.reader_task = None
@@ -144,6 +144,15 @@ class Peer:
         self.last_bs = self.last_sc = 0
         self.window = None
         self.failure = None
+        self.bs_uuid = list(uuid.uuid4().bytes)
+        self.sc_uuid = None
+        self.resuming = bool(getattr(args, "resume", False) and previous and not previous.failure
+                             and not previous.bs_pending and not previous.sc_pending)
+        if self.resuming:
+            self.bs_uuid = previous.bs_uuid
+            self.sc_uuid = previous.sc_uuid
+            self.last_bs, self.last_sc = previous.last_bs, previous.last_sc
+            self.attachments = {eui: dict(value) for eui, value in previous.attachments.items()}
 
     async def send(self, message):
         async with self.write_lock:
@@ -158,8 +167,11 @@ class Peer:
             self.args.host, self.args.port, ssl=context,
             server_hostname=self.args.server_name or self.args.host,
         ), self.args.timeout)
-        await self.send({"command": "con", "opId": 0, "version": "1.0.0", "bsEui": self.args.gateway_eui,
-                         "bidi": True, "vendor": "ChirpStack simulator", "snBsUuid": list(uuid.uuid4().bytes)})
+        connect = {"command": "con", "opId": 0, "version": "1.0.0", "bsEui": self.args.gateway_eui,
+                   "bidi": True, "vendor": "ChirpStack simulator", "snBsUuid": self.bs_uuid}
+        if self.resuming:
+            connect.update(snBsOpId=self.last_bs, snScOpId=self.last_sc)
+        await self.send(connect)
         response = await asyncio.wait_for(self.codec.read(self.reader), self.args.timeout)
         if response["command"] != "conRsp" or response["opId"] != 0:
             raise ProtocolError("Service center rejected connect")
@@ -167,9 +179,17 @@ class Peer:
         if len(version) != 3 or version[:2] != ["1", "0"] or not version[2].isdigit():
             raise ProtocolError("Unsupported BSSCI version")
         if boolean(response.get("snResume")):
-            raise ProtocolError("Simulator does not support session resumption")
+            if not self.resuming or response.get("snScUuid") != self.sc_uuid:
+                raise ProtocolError("Service center resumed an unknown session")
+            self.stats["resumed_sessions"] = self.stats.get("resumed_sessions", 0) + 1
+            if self.args.device_eui in self.attachments:
+                self.attached.set()
+        else:
+            self.last_bs = self.last_sc = 0
+            self.attachments.clear()
         integer(response.get("scEui"))
         octets(response.get("snScUuid"), 16)
+        self.sc_uuid = response["snScUuid"]
         await self.send({"command": "conCmp", "opId": 0})
         self.stats["connections"] += 1
         self.reader_task = asyncio.create_task(self.read_loop())
@@ -379,6 +399,7 @@ def arguments(argv=None):
     parser.add_argument("--listen-seconds", type=float, default=2.0, help="Time per uplink to accept a downlink")
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--reconnect-after", type=int, default=0, help="Reconnect after this many uplinks; 0 keeps one session")
+    parser.add_argument("--resume", action="store_true", help="Request resumption of synchronized sessions within this process")
     parser.add_argument("--downlink-result", choices=("sent", "expired", "invalid"), default="sent")
     parser.add_argument("--encoding", choices=("json", "msgpack"), default="json")
     parser.add_argument("--state-file", type=Path, help="Persistent packet counter; default is a hidden file in the working directory")
@@ -401,8 +422,9 @@ async def run(args):
     Codec(args.encoding)  # Check optional dependency before opening a connection.
     state = CounterState(args.state_file, args.gateway_eui, args.device_eui)
     stats = {"connections": 0, "uplinks": 0, "downlinks": 0, "failed_downlinks": 0}
+    previous = None
     while stats["uplinks"] < args.count:
-        peer = Peer(args, state, stats)
+        peer = Peer(args, state, stats, previous)
         try:
             await peer.connect()
             batch = args.reconnect_after or args.count
@@ -412,6 +434,7 @@ async def run(args):
                     await asyncio.sleep(args.interval)
         finally:
             await peer.close()
+        previous = peer
         if stats["uplinks"] < args.count:
             await asyncio.sleep(0.25)  # Let the server retire the previous TLS session.
     print(json.dumps({**stats, "next_counter": state.next_counter}), flush=True)

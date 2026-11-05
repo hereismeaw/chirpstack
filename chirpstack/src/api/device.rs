@@ -65,7 +65,14 @@ impl DeviceService for Device {
         let device_type = api::DeviceType::try_from(req_d.device_type)
             .map_err(|_| Status::invalid_argument("invalid device_type"))?;
         if device_type == api::DeviceType::MiotyDevice {
+            self.validator
+                .validate(
+                    request.extensions(),
+                    validator::ValidateDeviceProfileAccess::new(validator::Flag::Read, dp_id),
+                )
+                .await?;
             crate::mioty::validate_device(req_d.mioty.as_ref(), true)?;
+            crate::mioty::validate_profile(app_id.into(), dp_id.into()).await?;
         }
         let d = device::Device {
             device_type: device_type as i16,
@@ -224,6 +231,7 @@ impl DeviceService for Device {
         }
         if existing.device_type == 1 {
             crate::mioty::validate_device(req_d.mioty.as_ref(), false)?;
+            crate::mioty::validate_profile(app_id.into(), dp_id.into()).await?;
         }
         let updated = device::Device {
             dev_eui,
@@ -275,8 +283,9 @@ impl DeviceService for Device {
         let existing = device::get(&dev_eui).await.map_err(|e| e.status())?;
         if existing.device_type == 1 {
             crate::mioty::delete_device(&existing).await?;
+        } else {
+            device::delete(&dev_eui).await.map_err(|e| e.status())?;
         }
-        device::delete(&dev_eui).await.map_err(|e| e.status())?;
 
         let mut resp = Response::new(());
         resp.metadata_mut()

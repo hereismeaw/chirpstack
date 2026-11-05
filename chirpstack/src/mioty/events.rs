@@ -96,6 +96,7 @@ pub async fn downlink_result(
     dl: &mioty::Downlink,
     result: &str,
     tx_time: Option<DateTime<Utc>>,
+    lease: Option<&storage::mioty_session::Lease>,
 ) -> Result<()> {
     anyhow::ensure!(
         dl.dev_eui == dev.dev_eui && dl.gateway_id == gw.gateway_id,
@@ -147,7 +148,7 @@ pub async fn downlink_result(
             .encode_to_vec(),
         )
     };
-    mioty::finish_downlink(
+    mioty::finish_downlink_with_lease(
         dl,
         result == "sent",
         &mioty::Event {
@@ -160,6 +161,7 @@ pub async fn downlink_result(
             kind: kind.into(),
             rx_key: None,
         },
+        lease,
     )
     .await?;
     Ok(())
@@ -272,7 +274,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        downlink_result(&gw, &dev, &dl, "expired", None)
+        downlink_result(&gw, &dev, &dl, "expired", None, None)
             .await
             .unwrap();
         assert!(

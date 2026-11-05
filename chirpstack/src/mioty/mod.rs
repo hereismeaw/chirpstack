@@ -96,6 +96,24 @@ pub fn validate_device(values: Option<&api::MiotyDevice>, create: bool) -> Resul
     Ok(())
 }
 
+pub async fn validate_profile(
+    application_id: crate::storage::fields::Uuid,
+    profile_id: crate::storage::fields::Uuid,
+) -> Result<(), Status> {
+    let app = crate::storage::application::get(&application_id)
+        .await
+        .map_err(|e| e.status())?;
+    let profile = crate::storage::device_profile::get(&profile_id)
+        .await
+        .map_err(|e| e.status())?;
+    if profile.tenant_id.is_some_and(|id| id != app.tenant_id) {
+        return Err(Status::invalid_argument(
+            "Mioty device profile and application must belong to the same tenant",
+        ));
+    }
+    Ok(())
+}
+
 fn flags(v: &api::MiotyDevice) -> i16 {
     i16::from(v.dual_channel)
         | (i16::from(v.repetition) << 1)
@@ -188,8 +206,14 @@ pub async fn update_device(
 }
 
 pub async fn delete_device(d: &device::Device) -> Result<(), Status> {
-    // The native endpoint record is removed by the device foreign key cascade.
-    server::detach(d.dev_eui).await;
+    let app = crate::storage::application::get(&d.application_id)
+        .await
+        .map_err(|e| e.status())?;
+    mioty::delete_device(d.dev_eui)
+        .await
+        .map_err(|e| e.status())?;
+    // Notify after commit, with explicit ownership because the device is gone.
+    server::notify_tenant(app.tenant_id, d.dev_eui, true).await;
     Ok(())
 }
 

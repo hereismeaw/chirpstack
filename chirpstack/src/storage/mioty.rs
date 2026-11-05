@@ -121,14 +121,25 @@ pub struct Downlink {
 }
 
 /// Reserve one item for a receive window across all gateway connections.
+#[cfg(test)]
 pub async fn reserve_downlink(
     ep: &Endpoint,
     gateway_id: EUI64,
     counter: u32,
 ) -> Result<Option<(Downlink, super::device_queue::DeviceQueueItem)>, Error> {
+    reserve_downlink_with_lease(ep, gateway_id, counter, None).await
+}
+
+pub async fn reserve_downlink_with_lease(
+    ep: &Endpoint,
+    gateway_id: EUI64,
+    counter: u32,
+    lease: Option<&super::mioty_session::Lease>,
+) -> Result<Option<(Downlink, super::device_queue::DeviceQueueItem)>, Error> {
     let eui = ep.dev_eui;
     let mut conn = get_async_db_conn().await?;
     conn.transaction::<_, Error, _>(async |conn| {
+        super::mioty_session::fence(conn, gateway_id, lease).await?;
         // The conditional write serializes reservations on SQLite and PostgreSQL.
         let changed = diesel::update(
             mioty_device::table
@@ -243,10 +254,50 @@ pub async fn flush_queue(eui: EUI64) -> Result<(), Error> {
     .await
 }
 
-/// Retire a confirmed result or release for a later window after an explicit rejection.
-pub async fn finish_downlink(dl: &Downlink, sent: bool, event: &Event) -> Result<(), Error> {
+pub async fn delete_device(eui: EUI64) -> Result<(), Error> {
     let mut conn = get_async_db_conn().await?;
     conn.transaction::<(), Error, _>(async |conn| {
+        diesel::update(mioty_device::table.find(eui))
+            .set(mioty_device::dev_eui.eq(eui))
+            .execute(conn)
+            .await?;
+        if mioty_downlink::table
+            .find(eui)
+            .count()
+            .get_result::<i64>(conn)
+            .await?
+            != 0
+        {
+            return Err(Error::NotAllowed(
+                "wait for the pending MIOTY downlink before deleting the device".into(),
+            ));
+        }
+        let count = diesel::delete(device::table.find(eui))
+            .execute(conn)
+            .await?;
+        if count != 1 {
+            return Err(Error::NotFound(eui.to_string()));
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Retire a confirmed result or release for a later window after an explicit rejection.
+#[cfg(test)]
+pub async fn finish_downlink(dl: &Downlink, sent: bool, event: &Event) -> Result<(), Error> {
+    finish_downlink_with_lease(dl, sent, event, None).await
+}
+
+pub async fn finish_downlink_with_lease(
+    dl: &Downlink,
+    sent: bool,
+    event: &Event,
+    lease: Option<&super::mioty_session::Lease>,
+) -> Result<(), Error> {
+    let mut conn = get_async_db_conn().await?;
+    conn.transaction::<(), Error, _>(async |conn| {
+        super::mioty_session::fence(conn, dl.gateway_id, lease).await?;
         let deleted = diesel::delete(
             mioty_downlink::table
                 .find(dl.dev_eui)
@@ -278,9 +329,18 @@ pub async fn finish_downlink(dl: &Downlink, sent: bool, event: &Event) -> Result
 
 /// A new BSSCI session discards the previous gateway queue. Retry in a newer
 /// radio window; preserve last_downlink_counter to prevent counter reuse.
+#[cfg(test)]
 pub async fn reset_gateway_downlinks(gateway_id: EUI64) -> Result<(), Error> {
+    reset_gateway_downlinks_with_lease(gateway_id, None).await
+}
+
+pub async fn reset_gateway_downlinks_with_lease(
+    gateway_id: EUI64,
+    lease: Option<&super::mioty_session::Lease>,
+) -> Result<(), Error> {
     let mut conn = get_async_db_conn().await?;
     conn.transaction::<(), Error, _>(async |conn| {
+        super::mioty_session::fence(conn, gateway_id, lease).await?;
         let items: Vec<Downlink> = mioty_downlink::table
             .filter(mioty_downlink::gateway_id.eq(gateway_id))
             .load(conn)
@@ -314,6 +374,7 @@ pub struct Event {
 
 /// Commit acceptance and event together. A process crash cannot leave an
 /// accepted packet without its integration event in the durable outbox.
+#[cfg(test)]
 pub async fn accept_event(
     ep: &Endpoint,
     counter: u32,
@@ -321,8 +382,20 @@ pub async fn accept_event(
     event: &Event,
     time: DateTime<Utc>,
 ) -> Result<bool, Error> {
+    accept_event_with_lease(ep, counter, gateway_id, event, time, None).await
+}
+
+pub async fn accept_event_with_lease(
+    ep: &Endpoint,
+    counter: u32,
+    gateway_id: EUI64,
+    event: &Event,
+    time: DateTime<Utc>,
+    lease: Option<&super::mioty_session::Lease>,
+) -> Result<bool, Error> {
     let mut conn = get_async_db_conn().await?;
     conn.transaction::<bool, Error, _>(async |conn| {
+        super::mioty_session::fence(conn, gateway_id, lease).await?;
         let changed = diesel::update(
             mioty_device::table
                 .find(ep.dev_eui)

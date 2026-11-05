@@ -27,7 +27,7 @@ use super::{
 };
 use crate::{
     config,
-    storage::{gateway, mioty},
+    storage::{gateway, mioty, mioty_session},
 };
 
 const MAX_PENDING: usize = 128;
@@ -48,7 +48,21 @@ enum Control {
 static SESSIONS: LazyLock<Mutex<HashMap<EUI64, Handle>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+struct Resumable {
+    state: Session,
+    bs_uuid: Vec<u8>,
+    sc_uuid: Uuid,
+    certificate: Vec<u8>,
+    tenant_id: crate::storage::fields::Uuid,
+    encoding: Encoding,
+    disconnected: Instant,
+}
+
+static RESUMABLE: LazyLock<Mutex<HashMap<EUI64, Resumable>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 pub async fn disconnect(eui: EUI64) {
+    RESUMABLE.lock().await.remove(&eui);
     if let Some(handle) = SESSIONS.lock().await.get(&eui) {
         let _ = handle.shutdown.send(true);
     }
@@ -74,6 +88,13 @@ async fn broadcast(eui: EUI64, detach: bool) {
     let Ok(tenant_id) = tenant_id else {
         return;
     };
+    notify_tenant(tenant_id, eui, detach).await;
+}
+
+pub async fn notify_tenant(tenant_id: crate::storage::fields::Uuid, eui: EUI64, detach: bool) {
+    if let Err(err) = mioty_session::notify(tenant_id).await {
+        tracing::warn!(error=%err,"MIOTY configuration notification failed; periodic reconciliation will retry");
+    }
     let sessions = SESSIONS.lock().await;
     for handle in sessions.values() {
         if handle.tenant_id != tenant_id {
@@ -188,6 +209,18 @@ fn validate_connect(value: &Value) -> Result<EUI64> {
     );
     wire::boolean(value, "bidi")?;
     wire::bytes(value, "snBsUuid", Some(16))?;
+    if value.get("snBsOpId").is_some() {
+        anyhow::ensure!(
+            wire::int(value, "snBsOpId")? >= 0,
+            "invalid BS resume operation ID"
+        );
+    }
+    if value.get("snScOpId").is_some() {
+        anyhow::ensure!(
+            wire::int(value, "snScOpId")? <= 0,
+            "invalid SC resume operation ID"
+        );
+    }
     Ok(EUI64::from_be_bytes(
         wire::uint(value, "bsEui")?.to_be_bytes(),
     ))
@@ -224,8 +257,46 @@ async fn connection(
     let eui = validate_connect(&con)?;
     let gw = gateway::get(&eui).await?;
     validate_certificate(&gw, &peer)?;
+    let lease = mioty_session::acquire(eui)
+        .await?
+        .context("gateway already has an active owner")?;
+    let result = owned_connection(stream, conf, &gw, &peer, &con, encoding, &lease).await;
+    if let Err(err) = mioty_session::release(&lease).await {
+        tracing::debug!(error=%err,"MIOTY lease release failed");
+    }
+    result
+}
+
+async fn owned_connection(
+    mut stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+    conf: &config::Mioty,
+    gw: &gateway::Gateway,
+    peer: &[u8],
+    con: &Value,
+    encoding: Encoding,
+    lease: &mioty_session::Lease,
+) -> Result<()> {
+    let eui = gw.gateway_id;
     let id = Uuid::new_v4();
-    send(&mut stream, &json!({"command":"conRsp","opId":0,"version":"1.0.0", "scEui":u64::from_be_bytes(conf.service_center_eui.to_be_bytes()),"snResume":false,"snScUuid":id.as_bytes()}), encoding).await?;
+    let bs_uuid = wire::bytes(con, "snBsUuid", Some(16))?;
+    let previous = RESUMABLE.lock().await.remove(&eui);
+    // Resume only a synchronized, quiescent session from this process. A crash,
+    // outstanding operations, changed certificate or uncertain IDs starts fresh.
+    let previous = previous.filter(|old| {
+        old.disconnected.elapsed() < Duration::from_secs(180)
+            && old.bs_uuid == bs_uuid
+            && old.certificate == peer
+            && old.tenant_id == gw.tenant_id
+            && old.encoding == encoding
+            && con.get("snBsOpId").and_then(Value::as_i64) == Some(old.state.last_bs)
+            && con.get("snScOpId").and_then(Value::as_i64) == Some(old.state.last_sc)
+    });
+    let resumed = previous.is_some();
+    let sc_uuid = previous.as_ref().map_or(id, |old| old.sc_uuid);
+    let mut state = previous.map_or_else(Session::default, |old| old.state);
+    state.lease = Some(lease.clone());
+    state.bidirectional = wire::boolean(con, "bidi")?;
+    send(&mut stream, &json!({"command":"conRsp","opId":0,"version":"1.0.0", "scEui":u64::from_be_bytes(conf.service_center_eui.to_be_bytes()),"snResume":resumed,"snScUuid":sc_uuid.as_bytes()}), encoding).await?;
     let (complete, enc) =
         timeout(OP_TIMEOUT, wire::read(&mut stream, conf.max_frame_size)).await??;
     anyhow::ensure!(
@@ -236,10 +307,9 @@ async fn connection(
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     {
         let mut sessions = SESSIONS.lock().await;
-        anyhow::ensure!(
-            !sessions.contains_key(&eui),
-            "gateway already has an active session"
-        );
+        if let Some(old) = sessions.get(&eui) {
+            let _ = old.shutdown.send(true);
+        }
         sessions.insert(
             eui,
             Handle {
@@ -267,24 +337,28 @@ async fn connection(
             }
         }
     });
-    let mut state = Session {
-        bidirectional: wire::boolean(&con, "bidi")?,
-        ..Default::default()
-    };
+    let mut may_resume = false;
     let result = async {
         seen(&gw).await?;
         connection_status(&gw, "online").await?;
-        mioty::reset_gateway_downlinks(eui).await?;
-        for ep in mioty::for_tenant(gw.tenant_id).await? {
-            if ep.attached { state.propagate(&mut writer, &ep, encoding).await?; }
-        }
+        if !resumed { mioty::reset_gateway_downlinks_with_lease(eui, Some(lease)).await?; }
+        state.reconcile_all(&mut writer, gw, encoding).await?;
+        let mut revision = mioty_session::renew(lease).await?;
+        let mut reconciled = Instant::now();
         state.initiate(&mut writer, json!({"command":"status"}), encoding).await?;
         let mut tick = tokio::time::interval(Duration::from_secs(10));
         loop {
             tokio::select! {
                 _ = shutdown_rx.changed() => break,
                 frame = input_rx.recv() => {
-                    let (value, enc) = frame.context("MIOTY reader stopped")??;
+                    let (value, enc) = match frame.context("MIOTY reader stopped")? {
+                        Ok(value)=>value,
+                        Err(err)=> {
+                            may_resume=err.downcast_ref::<std::io::Error>().is_some_and(|err|matches!(err.kind(),
+                                std::io::ErrorKind::UnexpectedEof|std::io::ErrorKind::ConnectionReset|std::io::ErrorKind::ConnectionAborted));
+                            return Err(err);
+                        }
+                    };
                     anyhow::ensure!(enc == encoding, "BSSCI encoding changed during session");
                     // Recheck ownership and certificate after CRUD / certificate rotation.
                     let current = gateway::get(&eui).await?;
@@ -304,6 +378,11 @@ async fn connection(
                     }
                 },
                 _ = tick.tick() => {
+                    let updated = mioty_session::renew(lease).await?;
+                    if updated != revision || reconciled.elapsed() >= Duration::from_secs(30) {
+                        state.reconcile_all(&mut writer, gw, encoding).await?;
+                        revision=updated; reconciled=Instant::now();
+                    }
                     anyhow::ensure!(state.pending.values().all(|(_,at)| at.elapsed() < OP_TIMEOUT), "BSSCI operation timed out");
                     anyhow::ensure!(state.inbound.values().all(|(_,_,at)| at.elapsed() < OP_TIMEOUT), "BSSCI completion timed out");
                     if !state.pending.values().any(|(v,_)| v["command"] == "status") {
@@ -321,8 +400,40 @@ async fn connection(
         sessions.remove(&eui);
     }
     drop(sessions);
-    if let Err(err) = connection_status(&gw, "offline").await {
-        tracing::debug!(error = %err, "MIOTY disconnect status update failed");
+    if mioty_session::owns(lease).await.unwrap_or(false) {
+        if let Err(err) = connection_status(gw, "offline").await {
+            tracing::debug!(error=%err,"MIOTY disconnect status update failed");
+        }
+        if may_resume
+            && state.pending.is_empty()
+            && state.inbound.is_empty()
+            && state.backlog.is_empty()
+        {
+            let mut cache = RESUMABLE.lock().await;
+            cache.retain(|_, old| old.disconnected.elapsed() < Duration::from_secs(180));
+            if cache.len() >= conf.max_connections {
+                if let Some(oldest) = cache
+                    .iter()
+                    .min_by_key(|(_, old)| old.disconnected)
+                    .map(|(eui, _)| *eui)
+                {
+                    cache.remove(&oldest);
+                }
+            }
+            state.lease = None;
+            cache.insert(
+                eui,
+                Resumable {
+                    state,
+                    bs_uuid,
+                    sc_uuid,
+                    certificate: peer.to_vec(),
+                    tenant_id: gw.tenant_id,
+                    encoding,
+                    disconnected: Instant::now(),
+                },
+            );
+        }
     }
     result
 }
@@ -369,6 +480,8 @@ async fn send<W: AsyncWrite + Unpin>(
 
 #[derive(Default)]
 struct Session {
+    lease: Option<mioty_session::Lease>,
+    known: HashMap<EUI64, (String, i32, Vec<u8>, i16)>,
     bidirectional: bool,
     last_bs: i64,
     last_sc: i64,
@@ -405,6 +518,15 @@ impl Session {
         ep: &mioty::Endpoint,
         enc: Encoding,
     ) -> Result<()> {
+        self.known.insert(
+            ep.dev_eui,
+            (
+                ep.ep_class.clone(),
+                ep.short_address,
+                ep.session_key.clone(),
+                ep.radio_flags,
+            ),
+        );
         self.initiate(writer, json!({"command":"attPrp", "epEui":u64::from_be_bytes(ep.dev_eui.to_be_bytes()),
             "bidi":ep.ep_class == "A", "nwkSnKey":ep.session_key, "shAddr":ep.short_address,
             "lastPacketCnt":ep.last_packet_counter.max(0), "dualChan":ep.radio_flags & 1 != 0,
@@ -417,12 +539,48 @@ impl Session {
         eui: EUI64,
         enc: Encoding,
     ) -> Result<()> {
+        self.known.remove(&eui);
         self.initiate(
             writer,
             json!({"command":"detPrp", "epEui":u64::from_be_bytes(eui.to_be_bytes())}),
             enc,
         )
         .await
+    }
+
+    async fn reconcile_all<W: AsyncWrite + Unpin>(
+        &mut self,
+        writer: &mut W,
+        gw: &gateway::Gateway,
+        enc: Encoding,
+    ) -> Result<()> {
+        let endpoints = mioty::for_tenant(gw.tenant_id).await?;
+        let active: std::collections::HashSet<EUI64> = endpoints
+            .iter()
+            .filter(|ep| ep.attached)
+            .map(|ep| ep.dev_eui)
+            .collect();
+        let removed: Vec<_> = self
+            .known
+            .keys()
+            .filter(|eui| !active.contains(eui))
+            .copied()
+            .collect();
+        for eui in removed {
+            self.remove(writer, eui, enc).await?;
+        }
+        for ep in endpoints.into_iter().filter(|ep| ep.attached) {
+            let config = (
+                ep.ep_class.clone(),
+                ep.short_address,
+                ep.session_key.clone(),
+                ep.radio_flags,
+            );
+            if self.known.get(&ep.dev_eui) != Some(&config) {
+                self.propagate(writer, &ep, enc).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn message<W: AsyncWrite + Unpin>(
@@ -445,7 +603,15 @@ impl Session {
                 if request["command"] == "dlDataQue" {
                     let dl = mioty::pending_downlink(uplink::eui(&request)?).await?;
                     let (dev, _) = uplink::endpoint(gw, dl.dev_eui).await?;
-                    super::events::downlink_result(gw, &dev, &dl, "rejected", None).await?;
+                    super::events::downlink_result(
+                        gw,
+                        &dev,
+                        &dl,
+                        "rejected",
+                        None,
+                        self.lease.as_ref(),
+                    )
+                    .await?;
                 }
             }
             if let Some(next) = self.backlog.pop_front() {
@@ -515,7 +681,7 @@ impl Session {
         let mut downlink = None;
         let result = match command {
             "ping" => Ok(()),
-            "ulData" => match uplink::receive(gw, &value).await {
+            "ulData" => match uplink::receive(gw, &value, self.lease.as_ref()).await {
                 Ok(accepted) => {
                     downlink = accepted;
                     Ok(())
@@ -554,7 +720,10 @@ impl Session {
         if !self.bidirectional || self.pending.len() >= MAX_PENDING {
             return Ok(());
         }
-        let Some((dl, qi)) = mioty::reserve_downlink(ep, gw.gateway_id, counter).await? else {
+        let Some((dl, qi)) =
+            mioty::reserve_downlink_with_lease(ep, gw.gateway_id, counter, self.lease.as_ref())
+                .await?
+        else {
             return Ok(());
         };
         let data = super::crypto::encode(
@@ -599,6 +768,7 @@ impl Session {
             } else {
                 None
             },
+            self.lease.as_ref(),
         )
         .await?;
         Ok(())
@@ -802,7 +972,7 @@ mod tests {
         let output = timeout(
             Duration::from_secs(30),
             command()
-                .args(["--count", "2", "--reconnect-after", "1"])
+                .args(["--count", "2", "--reconnect-after", "1", "--resume"])
                 .output(),
         )
         .await
@@ -821,6 +991,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(summary["connections"], 2);
+        assert_eq!(summary["resumed_sessions"],1);
         assert_eq!(summary["uplinks"], 2);
         assert_eq!(summary["downlinks"], 1);
         assert_eq!(mioty::get(ep.dev_eui).await.unwrap().last_packet_counter, 2);
