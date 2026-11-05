@@ -6,12 +6,13 @@ import { Space, Breadcrumb, Card, Button, Menu } from "antd";
 
 import type { Tenant } from "@chirpstack/chirpstack-api-grpc-web/api/tenant_pb";
 import type { Gateway, GetGatewayResponse } from "@chirpstack/chirpstack-api-grpc-web/api/gateway_pb";
-import { GetGatewayRequest, DeleteGatewayRequest } from "@chirpstack/chirpstack-api-grpc-web/api/gateway_pb";
+import { GetGatewayRequest, DeleteGatewayRequest, GatewayType } from "@chirpstack/chirpstack-api-grpc-web/api/gateway_pb";
 
 import GatewayStore from "../../stores/GatewayStore";
 import DeleteConfirm from "../../components/DeleteConfirm";
 
 import GatewayDashboard from "./GatewayDashboard";
+import MiotyGatewayDashboard from "./MiotyGatewayDashboard";
 import EditGateway from "./EditGateway";
 import GatewayFrames from "./GatewayFrames";
 import GatewayCertificate from "./GatewayCertificate";
@@ -62,6 +63,7 @@ function GatewayLayout(props: IProps) {
     return null;
   }
 
+  const isMioty = gw.getGatewayType() === GatewayType.MIOTY;
   const path = location.pathname;
   let tab = "dashboard";
 
@@ -94,7 +96,7 @@ function GatewayLayout(props: IProps) {
           />
         )}
         title={gw.getName()}
-        subTitle={`gateway id: ${gw.getGatewayId()}`}
+        subTitle={`${isMioty ? "Mioty" : "LoRaWAN"} gateway id: ${gw.getGatewayId()}`}
         extra={[
           <Admin tenantId={props.tenant.getId()} isGatewayAdmin key="delete-gateway">
             <DeleteConfirm confirm={gw.getName()} typ="gateway" onConfirm={deleteGateway}>
@@ -130,13 +132,13 @@ function GatewayLayout(props: IProps) {
               key: "frames",
               label: <Link to={`/tenants/${tenant.getId()}/gateways/${gw.getGatewayId()}/frames`}>LoRaWAN frames</Link>,
             },
-          ]}
+          ].filter(item => !isMioty || item.key !== "frames")}
         />
         <Routes>
-          <Route path="/" element={<GatewayDashboard gateway={gw} lastSeenAt={lastSeenAt} />} />
+          <Route path="/" element={isMioty ? <MiotyGatewayDashboard gateway={gw} lastSeenAt={lastSeenAt} /> : <GatewayDashboard gateway={gw} lastSeenAt={lastSeenAt} />} />
           <Route path="/edit" element={<EditGateway gateway={gw} />} />
           <Route path="/certificate" element={<GatewayCertificate gateway={gw} />} />
-          <Route path="/frames" element={<GatewayFrames gateway={gw} />} />
+          {!isMioty && <Route path="/frames" element={<GatewayFrames gateway={gw} />} />}
         </Routes>
       </Card>
     </Space>

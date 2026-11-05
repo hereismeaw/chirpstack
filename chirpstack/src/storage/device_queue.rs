@@ -64,7 +64,13 @@ impl Default for DeviceQueueItem {
 }
 
 pub async fn enqueue_item(qi: DeviceQueueItem) -> Result<DeviceQueueItem, Error> {
-    qi.validate()?;
+    if qi.f_port == 0 && super::device::get(&qi.dev_eui).await?.device_type == 1 {
+        if qi.is_encrypted || qi.confirmed || qi.data.len() > 245 {
+            return Err(Error::Validation("invalid native MIOTY queue item".into()));
+        }
+    } else {
+        qi.validate()?;
+    }
 
     let qi: DeviceQueueItem = diesel::insert_into(device_queue_item::table)
         .values(&qi)

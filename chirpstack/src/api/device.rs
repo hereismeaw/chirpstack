@@ -62,7 +62,13 @@ impl DeviceService for Device {
             )
             .await?;
 
+        let device_type = api::DeviceType::try_from(req_d.device_type)
+            .map_err(|_| Status::invalid_argument("invalid device_type"))?;
+        if device_type == api::DeviceType::MiotyDevice {
+            crate::mioty::validate_device(req_d.mioty.as_ref(), true)?;
+        }
         let d = device::Device {
+            device_type: device_type as i16,
             dev_eui,
             application_id: app_id.into(),
             device_profile_id: dp_id.into(),
@@ -76,7 +82,11 @@ impl DeviceService for Device {
             ..Default::default()
         };
 
-        let _ = device::create(d).await.map_err(|e| e.status())?;
+        if d.device_type == 1 {
+            crate::mioty::create_device(d, req_d.mioty.as_ref().unwrap()).await?;
+        } else {
+            device::create(d).await.map_err(|e| e.status())?;
+        }
 
         let mut resp = Response::new(());
         resp.metadata_mut()
@@ -105,6 +115,11 @@ impl DeviceService for Device {
 
         let d = device::get(&dev_eui).await.map_err(|e| e.status())?;
 
+        let mioty = if d.device_type == 1 {
+            Some(crate::mioty::get_device(&d).await?)
+        } else {
+            None
+        };
         let mut resp = Response::new(api::GetDeviceResponse {
             device: Some(api::Device {
                 dev_eui: d.dev_eui.to_string(),
@@ -117,6 +132,8 @@ impl DeviceService for Device {
                 variables: d.variables.into_hashmap(),
                 tags: d.tags.into_hashmap(),
                 join_eui: d.join_eui.to_string(),
+                device_type: d.device_type as i32,
+                mioty,
             }),
             created_at: Some(helpers::datetime_to_prost_timestamp(&d.created_at)),
             updated_at: Some(helpers::datetime_to_prost_timestamp(&d.updated_at)),
@@ -188,8 +205,27 @@ impl DeviceService for Device {
             )
             .await?;
 
-        // update
-        let _ = device::update(device::Device {
+        let existing = device::get(&dev_eui).await.map_err(|e| e.status())?;
+        if existing.device_type as i32 != req_d.device_type {
+            return Err(Status::invalid_argument("device type cannot be changed"));
+        }
+        if existing.device_type == 1 && existing.application_id != fields::Uuid::from(app_id) {
+            let old_app = crate::storage::application::get(&existing.application_id)
+                .await
+                .map_err(|e| e.status())?;
+            let new_app = crate::storage::application::get(&app_id.into())
+                .await
+                .map_err(|e| e.status())?;
+            if old_app.tenant_id != new_app.tenant_id {
+                return Err(Status::invalid_argument(
+                    "MIOTY devices cannot move between tenants",
+                ));
+            }
+        }
+        if existing.device_type == 1 {
+            crate::mioty::validate_device(req_d.mioty.as_ref(), false)?;
+        }
+        let updated = device::Device {
             dev_eui,
             application_id: app_id.into(),
             device_profile_id: dp_id.into(),
@@ -201,9 +237,15 @@ impl DeviceService for Device {
             variables: fields::KeyValue::new(req_d.variables.clone()),
             join_eui,
             ..Default::default()
-        })
-        .await
-        .map_err(|e| e.status())?;
+        };
+        let updated = if existing.device_type == 1 {
+            crate::mioty::update_device(updated, req_d.mioty.as_ref().unwrap()).await?
+        } else {
+            device::update(updated).await.map_err(|e| e.status())?
+        };
+        if existing.device_type == 1 {
+            crate::mioty::device_updated(updated.dev_eui).await;
+        }
 
         let mut resp = Response::new(());
         resp.metadata_mut()
@@ -230,6 +272,10 @@ impl DeviceService for Device {
             )
             .await?;
 
+        let existing = device::get(&dev_eui).await.map_err(|e| e.status())?;
+        if existing.device_type == 1 {
+            crate::mioty::delete_device(&existing).await?;
+        }
         device::delete(&dev_eui).await.map_err(|e| e.status())?;
 
         let mut resp = Response::new(());
@@ -318,6 +364,7 @@ impl DeviceService for Device {
                     description: d.description.clone(),
                     device_profile_id: d.device_profile_id.to_string(),
                     device_profile_name: d.device_profile_name.clone(),
+                    device_type: d.device_type as i32,
                     device_status: match d.margin.is_some() {
                         true => Some(api::DeviceStatus {
                             margin: d.margin.unwrap(),
@@ -357,6 +404,16 @@ impl DeviceService for Device {
                 validator::ValidateDeviceAccess::new(validator::Flag::Update, dev_eui),
             )
             .await?;
+        if device::get(&dev_eui)
+            .await
+            .map_err(|e| e.status())?
+            .device_type
+            == 1
+        {
+            return Err(Status::failed_precondition(
+                "operation is only available for LoRaWAN devices; use MIOTY configuration",
+            ));
+        }
 
         let dk = device_keys::DeviceKeys {
             dev_eui,
@@ -388,6 +445,16 @@ impl DeviceService for Device {
                 validator::ValidateDeviceAccess::new(validator::Flag::Read, dev_eui),
             )
             .await?;
+        if device::get(&dev_eui)
+            .await
+            .map_err(|e| e.status())?
+            .device_type
+            == 1
+        {
+            return Err(Status::failed_precondition(
+                "operation is only available for LoRaWAN devices; use MIOTY configuration",
+            ));
+        }
 
         let dk = device_keys::get(&dev_eui).await.map_err(|e| e.status())?;
 
@@ -425,6 +492,16 @@ impl DeviceService for Device {
                 validator::ValidateDeviceAccess::new(validator::Flag::Update, dev_eui),
             )
             .await?;
+        if device::get(&dev_eui)
+            .await
+            .map_err(|e| e.status())?
+            .device_type
+            == 1
+        {
+            return Err(Status::failed_precondition(
+                "operation is only available for LoRaWAN devices; use MIOTY configuration",
+            ));
+        }
 
         let dk = device_keys::get(&dev_eui).await.map_err(|e| e.status())?;
         let dk = device_keys::DeviceKeys {
@@ -459,6 +536,16 @@ impl DeviceService for Device {
                 validator::ValidateDeviceAccess::new(validator::Flag::Update, dev_eui),
             )
             .await?;
+        if device::get(&dev_eui)
+            .await
+            .map_err(|e| e.status())?
+            .device_type
+            == 1
+        {
+            return Err(Status::failed_precondition(
+                "operation is only available for LoRaWAN devices; use MIOTY configuration",
+            ));
+        }
 
         device_keys::delete(&dev_eui)
             .await
@@ -515,6 +602,16 @@ impl DeviceService for Device {
                 validator::ValidateDeviceAccess::new(validator::Flag::Update, dev_eui),
             )
             .await?;
+        if device::get(&dev_eui)
+            .await
+            .map_err(|e| e.status())?
+            .device_type
+            == 1
+        {
+            return Err(Status::failed_precondition(
+                "operation is only available for LoRaWAN devices; use MIOTY configuration",
+            ));
+        }
 
         let d = device::get(&dev_eui).await.map_err(|e| e.status())?;
         let dp = device_profile::get(&d.device_profile_id)
@@ -593,6 +690,16 @@ impl DeviceService for Device {
                 validator::ValidateDeviceAccess::new(validator::Flag::Update, dev_eui),
             )
             .await?;
+        if device::get(&dev_eui)
+            .await
+            .map_err(|e| e.status())?
+            .device_type
+            == 1
+        {
+            return Err(Status::failed_precondition(
+                "operation is only available for LoRaWAN devices; use MIOTY configuration",
+            ));
+        }
 
         device_queue::flush_for_dev_eui(&dev_eui)
             .await
@@ -630,6 +737,16 @@ impl DeviceService for Device {
                 validator::ValidateDeviceAccess::new(validator::Flag::Read, dev_eui),
             )
             .await?;
+        if device::get(&dev_eui)
+            .await
+            .map_err(|e| e.status())?
+            .device_type
+            == 1
+        {
+            return Err(Status::failed_precondition(
+                "operation is only available for LoRaWAN devices; use MIOTY configuration",
+            ));
+        }
 
         let d = device::get(&dev_eui).await.map_err(|e| e.status())?;
         let ds = match d.get_device_session() {
@@ -1115,6 +1232,51 @@ impl DeviceService for Device {
             }
         };
         let dev_eui = EUI64::from_str(&req_qi.dev_eui).map_err(|e| e.status())?;
+        self.validator
+            .validate(
+                request.extensions(),
+                validator::ValidateDeviceQueueAccess::new(validator::Flag::Create, dev_eui),
+            )
+            .await?;
+        let dev = device::get(&dev_eui).await.map_err(|e| e.status())?;
+        if dev.device_type == 1 {
+            if req_qi.is_encrypted
+                || req_qi.confirmed
+                || req_qi.f_port != 0
+                || req_qi.expires_at.is_some()
+                || !req_qi.id.is_empty()
+            {
+                return Err(Status::invalid_argument(
+                    "MIOTY uses raw payloads without LoRaWAN port, encryption, confirmation, expiry or caller-supplied ID",
+                ));
+            }
+            if req.flush_queue {
+                self.validator
+                    .validate(
+                        request.extensions(),
+                        validator::ValidateDeviceQueueAccess::new(validator::Flag::Delete, dev_eui),
+                    )
+                    .await?;
+                crate::mioty::flush_queue(&dev).await?;
+            }
+            let mut data = req_qi.data.clone();
+            if let Some(obj) = &req_qi.object {
+                let dp = device_profile::get(&dev.device_profile_id)
+                    .await
+                    .map_err(|e| e.status())?;
+                (_, data) = codec::struct_to_binary(
+                    dp.payload_codec_runtime,
+                    0,
+                    &dev.variables,
+                    &dp.payload_codec_script,
+                    obj,
+                )
+                .await
+                .map_err(|e| e.status())?;
+            }
+            let id = crate::mioty::send_downlink(&dev, data).await?;
+            return Ok(Response::new(api::EnqueueDeviceQueueItemResponse { id }));
+        }
         let id = if req_qi.id.is_empty() {
             Uuid::new_v4()
         } else {
@@ -1211,6 +1373,12 @@ impl DeviceService for Device {
             )
             .await?;
 
+        let dev = device::get(&dev_eui).await.map_err(|e| e.status())?;
+        if dev.device_type == 1 {
+            crate::mioty::flush_queue(&dev).await?;
+            return Ok(Response::new(()));
+        }
+
         device_queue::flush_for_dev_eui(&dev_eui)
             .await
             .map_err(|e| e.status())?;
@@ -1235,6 +1403,15 @@ impl DeviceService for Device {
                 validator::ValidateDeviceQueueAccess::new(validator::Flag::List, dev_eui),
             )
             .await?;
+
+        let dev = device::get(&dev_eui).await.map_err(|e| e.status())?;
+        if dev.device_type == 1 {
+            let result = crate::mioty::get_queue(&dev).await?;
+            return Ok(Response::new(api::GetDeviceQueueItemsResponse {
+                total_count: result.len() as u32,
+                result,
+            }));
+        }
 
         let items = device_queue::get_for_dev_eui(&dev_eui)
             .await
@@ -1280,6 +1457,16 @@ impl DeviceService for Device {
                 validator::ValidateDeviceAccess::new(validator::Flag::Read, dev_eui),
             )
             .await?;
+        if device::get(&dev_eui)
+            .await
+            .map_err(|e| e.status())?
+            .device_type
+            == 1
+        {
+            return Err(Status::failed_precondition(
+                "operation is only available for LoRaWAN devices; use MIOTY configuration",
+            ));
+        }
 
         let d = device::get(&dev_eui).await.map_err(|e| e.status())?;
         let ds = match d.get_device_session() {

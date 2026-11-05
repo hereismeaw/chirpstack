@@ -366,6 +366,9 @@ impl JoinRequest {
     }
 
     fn abort_on_device_is_disabled(&self) -> Result<()> {
+        if self.device.as_ref().unwrap().device_type != 0 {
+            return Err(anyhow!("LoRaWAN join received for a MIOTY endpoint"));
+        }
         if self.device.as_ref().unwrap().is_disabled {
             return Err(anyhow!("Device is disabled"));
         }

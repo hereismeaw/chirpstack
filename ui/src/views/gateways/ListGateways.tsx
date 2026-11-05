@@ -6,7 +6,7 @@ import { Space, Breadcrumb, Button, Badge, MenuProps, Modal, TreeSelect, TreeSel
 import type { ColumnsType } from "antd/es/table";
 
 import type { ListGatewaysResponse, GatewayListItem } from "@chirpstack/chirpstack-api-grpc-web/api/gateway_pb";
-import { ListGatewaysRequest, GatewayState } from "@chirpstack/chirpstack-api-grpc-web/api/gateway_pb";
+import { ListGatewaysRequest, GatewayState, GatewayType } from "@chirpstack/chirpstack-api-grpc-web/api/gateway_pb";
 import type {
   ListMulticastGroupsResponse,
   MulticastGroupListItem,
@@ -87,6 +87,13 @@ function ListGateways(props: IProps) {
         <Link to={`/tenants/${props.tenant.getId()}/gateways/${record.gatewayId}`}>{text}</Link>
       ),
       sorter: true,
+    },
+    {
+      title: "Gateway type",
+      dataIndex: "gatewayType",
+      key: "gatewayType",
+      width: 180,
+      render: value => value === GatewayType.MIOTY ? "Mioty Gateway" : "LoRaWAN Gateway",
     },
     {
       title: "Name",

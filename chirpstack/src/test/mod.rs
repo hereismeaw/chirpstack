@@ -40,6 +40,9 @@ pub async fn prepare<'a>() -> std::sync::MutexGuard<'a, ()> {
     conf.postgresql.dsn = env::var("TEST_POSTGRESQL_DSN").unwrap();
     conf.redis.servers = vec![env::var("TEST_REDIS_URL").unwrap()];
     conf.sqlite.path = ":memory:".to_string();
+    // Each SQLite :memory: connection has its own database. Keep migrations
+    // and concurrent test tasks on the same connection.
+    conf.sqlite.max_open_connections = 1;
     conf.network.enabled_regions = vec!["eu868".to_string()];
     conf.network.scheduler.class_b_schedule_advance = Duration::from_secs(128 * 2);
     conf.regions = vec![config::Region {

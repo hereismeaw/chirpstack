@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 
-import { Form, Input, InputNumber, Row, Col, Button, Tabs, Space, Card } from "antd";
+import { Form, Input, InputNumber, Row, Col, Button, Tabs, Space, Card, Select, Alert } from "antd";
 import type { TabsProps } from "antd/lib";
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 
 import { Location } from "@chirpstack/chirpstack-api-grpc-web/common/common_pb";
-import { Gateway } from "@chirpstack/chirpstack-api-grpc-web/api/gateway_pb";
+import { Gateway, GatewayType } from "@chirpstack/chirpstack-api-grpc-web/api/gateway_pb";
 
 import { onFinishFailed } from "../helpers";
 import EuiInput from "../../components/EuiInput";
@@ -22,6 +22,8 @@ interface IProps {
 
 function GatewayForm(props: IProps) {
   const [form] = Form.useForm();
+  const gatewayType = Form.useWatch("gatewayType", form) ?? props.initialValues.getGatewayType();
+  const isMioty = gatewayType === GatewayType.MIOTY;
   const [latValue, setLatValue] = useState<number>(0);
   const [lonValue, setLonValue] = useState<number>(0);
   const [locationPending, setLocationPending] = useState<boolean>(false);
@@ -75,6 +77,7 @@ function GatewayForm(props: IProps) {
     gw.setName(v.name);
     gw.setDescription(v.description);
     gw.setGatewayId(v.gatewayId);
+    gw.setGatewayType(v.gatewayType);
     gw.setStatsInterval(v.statsInterval);
     gw.setLocation(loc);
     gw.setDownlinkPriority(v.downlinkPriority);
@@ -102,6 +105,14 @@ function GatewayForm(props: IProps) {
       label: "General",
       children: (
         <>
+          <Form.Item label="Gateway type" name="gatewayType" rules={[{ required: true }]}>
+            <Select disabled={props.update || props.disabled} options={[
+              { value: GatewayType.LORAWAN, label: "LoRaWAN Gateway" },
+              { value: GatewayType.MIOTY, label: "Mioty Gateway" },
+            ]} />
+          </Form.Item>
+          {isMioty && <Alert type="info" showIcon style={{ marginBottom: 24 }}
+            title="Mioty Gateway" description="Register the base station EUI, then generate its TLS certificate and configure its Service Center connection." />}
           <Form.Item label="Name" name="name" rules={[{ required: true, message: "Please enter a name!" }]}>
             <Input disabled={props.disabled} />
           </Form.Item>
@@ -129,6 +140,7 @@ function GatewayForm(props: IProps) {
             </Col>
             <Col span={6}>
               <Form.Item
+                hidden={isMioty}
                 label="Downlink priority"
                 tooltip="ChirpStack selects the downlink gateway based on SNR, RSSI, uplink history and user-defined priority value."
                 name="downlinkPriority"

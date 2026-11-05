@@ -21,6 +21,9 @@ import Admin from "../../components/Admin";
 
 import DeviceDashboard from "./DeviceDashboard";
 import EditDevice from "./EditDevice";
+import { DeviceType } from "@chirpstack/chirpstack-api-grpc-web/api/device_pb";
+import MiotyDeviceDashboard from "./MiotyDeviceDashboard";
+
 import SetDeviceKeys from "./SetDeviceKeys";
 import DeviceFrames from "./DeviceFrames";
 import DeviceEvents from "./DeviceEvents";
@@ -223,21 +226,21 @@ function DeviceLayout(props: IProps) {
                 </Link>
               ),
             },
-          ]}
+          ].filter(item => device.getDeviceType() !== DeviceType.MIOTY_DEVICE || !["keys", "activation", "frames"].includes(item.key))}
         />
         <Routes>
-          <Route path="/" element={<DeviceDashboard device={device} lastSeenAt={lastSeenAt} deviceProfile={dp} />} />
+          <Route path="/" element={device.getDeviceType() === DeviceType.MIOTY_DEVICE ? <MiotyDeviceDashboard device={device} lastSeenAt={lastSeenAt} /> : <DeviceDashboard device={device} lastSeenAt={lastSeenAt} deviceProfile={dp} />} />
           <Route path="/edit" element={<EditDevice device={device} application={app} tenant={tenant} />} />
           <Route
             path="/keys"
-            element={<SetDeviceKeys device={device} application={app} tenant={tenant} deviceProfile={dp} />}
+            element={device.getDeviceType() !== DeviceType.MIOTY_DEVICE && <SetDeviceKeys device={device} application={app} tenant={tenant} deviceProfile={dp} />}
           />
-          <Route path="/frames" element={<DeviceFrames device={device} />} />
+          <Route path="/frames" element={device.getDeviceType() !== DeviceType.MIOTY_DEVICE && <DeviceFrames device={device} />} />
           <Route path="/events" element={<DeviceEvents device={device} />} />
           <Route path="/queue" element={<DeviceQueue device={device} />} />
           <Route
             path="/activation"
-            element={<DeviceActivation device={device} deviceProfile={dp} tenant={tenant} application={app} />}
+            element={device.getDeviceType() !== DeviceType.MIOTY_DEVICE && <DeviceActivation device={device} deviceProfile={dp} tenant={tenant} application={app} />}
           />
         </Routes>
       </Card>

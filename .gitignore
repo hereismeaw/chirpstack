@@ -20,6 +20,9 @@
 **/target
 **/target-sqlite
 
+# Python developer tools
+__pycache__/
+
 # Certificates
 /chirpstack/configuration/certs/*
 /chirpstack/configuration/private_*.toml

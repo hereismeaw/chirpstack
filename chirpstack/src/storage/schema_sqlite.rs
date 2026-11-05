@@ -63,6 +63,7 @@ diesel::table! {
         device_session -> Nullable<Binary>,
         app_layer_params -> Text,
         f_cnt_up -> BigInt,
+        device_type -> SmallInt,
     }
 }
 
@@ -279,6 +280,7 @@ diesel::table! {
         tags -> Text,
         properties -> Text,
         downlink_priority -> SmallInt,
+        gateway_type -> SmallInt,
     }
 }
 
@@ -450,6 +452,9 @@ diesel::joinable!(tenant_user_device_profile -> device_profile (device_profile_i
 diesel::joinable!(tenant_user_device_profile -> user (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    mioty_device,
+    mioty_downlink,
+    mioty_event,
     api_key,
     application,
     application_integration,
@@ -477,3 +482,46 @@ diesel::allow_tables_to_appear_in_same_query!(
     tenant_user_device_profile,
     user,
 );
+
+diesel::table! {
+    mioty_device (dev_eui) {
+        dev_eui -> Binary,
+        ep_class -> Text,
+        short_address -> Integer,
+        network_key -> Binary,
+        application_key -> Binary,
+        session_key -> Binary,
+        application_crypto -> SmallInt,
+        session_context -> Binary,
+        attach_counter -> BigInt,
+        last_packet_counter -> BigInt,
+        last_downlink_counter -> BigInt,
+        pre_attach -> Bool,
+        attached -> Bool,
+        radio_flags -> SmallInt,
+        serving_gateway -> Nullable<Binary>,
+    }
+}
+diesel::joinable!(mioty_device -> device (dev_eui));
+
+diesel::table! {
+    mioty_downlink (dev_eui) {
+        dev_eui -> Binary,
+        queue_item_id -> Text,
+        gateway_id -> Binary,
+        queue_id -> BigInt,
+        packet_counter -> BigInt,
+    }
+}
+diesel::table! {
+    mioty_event (id) {
+        id -> Text,
+        application_id -> Text,
+        payload -> Binary,
+        variables -> Text,
+        ready_at -> TimestamptzSqlite,
+        lease_until -> TimestamptzSqlite,
+        kind -> Text,
+        rx_key -> Nullable<Text>,
+    }
+}

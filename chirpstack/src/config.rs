@@ -22,6 +22,7 @@ pub struct Configuration {
     pub sqlite: Sqlite,
     pub api: Api,
     pub gateway: Gateway,
+    pub mioty: Mioty,
     pub network: Network,
     pub monitoring: Monitoring,
     pub integration: Integration,
@@ -33,6 +34,35 @@ pub struct Configuration {
     pub keks: Vec<Kek>,
     pub regions: Vec<Region>,
     pub ui: UI,
+}
+
+/// Native Base Station Service Center Interface listener.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct Mioty {
+    pub enabled: bool,
+    pub bind: String,
+    pub service_center_eui: lrwn::EUI64,
+    pub server_cert: String,
+    pub server_key: String,
+    pub max_frame_size: usize,
+    pub max_connections: usize,
+    pub idle_timeout_secs: u64,
+}
+
+impl Default for Mioty {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: "0.0.0.0:5000".into(),
+            service_center_eui: lrwn::EUI64::from_be_bytes([0; 8]),
+            server_cert: String::new(),
+            server_key: String::new(),
+            max_frame_size: 1024 * 1024,
+            max_connections: 256,
+            idle_timeout_secs: 180,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]

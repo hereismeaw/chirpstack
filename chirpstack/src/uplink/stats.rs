@@ -56,6 +56,9 @@ impl Stats {
     }
 
     async fn _handle(gateway_id: EUI64, s: gw::GatewayStats) -> Result<()> {
+        if gateway::get(&gateway_id).await?.gateway_type != 0 {
+            return Err(anyhow!("LoRaWAN statistics received for a MIOTY gateway"));
+        }
         let mut ctx = Stats {
             gateway_id,
             stats: s,

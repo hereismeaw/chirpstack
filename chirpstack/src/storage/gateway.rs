@@ -32,10 +32,14 @@ pub struct Gateway {
     pub tags: fields::KeyValue,
     pub properties: fields::KeyValue,
     pub downlink_priority: i16,
+    pub gateway_type: i16,
 }
 
 impl Gateway {
     fn validate(&self) -> Result<(), Error> {
+        if ![0, 1].contains(&self.gateway_type) {
+            return Err(Error::Validation("invalid gateway_type".into()));
+        }
         if self.name.is_empty() {
             return Err(Error::Validation("name is not set".into()));
         }
@@ -68,6 +72,7 @@ impl Default for Gateway {
             tags: fields::KeyValue::new(HashMap::new()),
             properties: fields::KeyValue::new(HashMap::new()),
             downlink_priority: 10,
+            gateway_type: 0,
         }
     }
 }
@@ -98,6 +103,7 @@ pub struct GatewayListItem {
     pub properties: fields::KeyValue,
     pub stats_interval_secs: i32,
     pub downlink_priority: i16,
+    pub gateway_type: i16,
 }
 
 #[derive(Queryable, PartialEq, Debug)]
@@ -290,6 +296,13 @@ pub async fn delete(gateway_id: &EUI64) -> Result<(), Error> {
     Ok(())
 }
 
+pub async fn list_mioty() -> Result<Vec<Gateway>, Error> {
+    Ok(gateway::table
+        .filter(gateway::gateway_type.eq(1))
+        .load(&mut get_async_db_conn().await?)
+        .await?)
+}
+
 pub async fn get_count(filters: &Filters) -> Result<i64, Error> {
     let mut q = gateway::dsl::gateway
         .select(dsl::count_star())
@@ -345,6 +358,7 @@ pub async fn list(
             gateway::properties,
             gateway::stats_interval_secs,
             gateway::downlink_priority,
+            gateway::gateway_type,
         ))
         .distinct()
         .into_boxed();
@@ -430,6 +444,7 @@ pub async fn get_meta(gateway_id: &EUI64) -> Result<GatewayMeta, Error> {
             gateway::downlink_priority,
         ))
         .filter(gateway::dsl::gateway_id.eq(&gateway_id))
+        .filter(gateway::gateway_type.eq(0))
         .first(&mut get_async_db_conn().await?)
         .await
         .map_err(|e| Error::from_diesel(e, gateway_id.to_string()))?;

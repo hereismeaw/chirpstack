@@ -309,7 +309,7 @@ pub async fn add_device(group_id: &Uuid, dev_eui: &EUI64) -> Result<(), Error> {
             .await
             .map_err(|e| Error::from_diesel(e, group_id.to_string()))?;
 
-        if d.application_id != mg.application_id {
+        if d.device_type != 0 || d.application_id != mg.application_id {
             // Device not found within the same application.
             return Err(Error::NotFound(dev_eui.to_string()));
         }
@@ -377,7 +377,7 @@ pub async fn add_gateway(group_id: &Uuid, gateway_id: &EUI64) -> Result<(), Erro
             .await
             .map_err(|e| Error::from_diesel(e, mg.application_id.to_string()))?;
 
-        if a.tenant_id != gw.tenant_id {
+        if gw.gateway_type != 0 || a.tenant_id != gw.tenant_id {
             // Gateway and multicast-group are not under same tenant.
             return Err(Error::NotFound(gateway_id.to_string()));
         }

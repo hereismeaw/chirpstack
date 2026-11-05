@@ -58,6 +58,9 @@ impl GatewayService for Gateway {
         let gw = gateway::Gateway {
             gateway_id: EUI64::from_str(&req_gw.gateway_id).map_err(|e| e.status())?,
             tenant_id: tenant_id.into(),
+            gateway_type: api::GatewayType::try_from(req_gw.gateway_type)
+                .map_err(|_| Status::invalid_argument("invalid gateway_type"))?
+                as i16,
             name: req_gw.name.clone(),
             description: req_gw.description.clone(),
             latitude: lat,
@@ -73,7 +76,15 @@ impl GatewayService for Gateway {
             ..Default::default()
         };
 
-        let _ = gateway::create(gw).await.map_err(|e| e.status())?;
+        let gw = gateway::create(gw).await.map_err(|e| e.status())?;
+        if gw.gateway_type == 1 {
+            if let Err(err) = crate::mioty::create_gateway(&gw).await {
+                if let Err(rollback) = gateway::delete(&gw.gateway_id).await {
+                    tracing::error!(gateway_id = %gw.gateway_id, error = %rollback, "MIOTY gateway rollback failed");
+                }
+                return Err(err);
+            }
+        }
 
         let mut resp = Response::new(());
         resp.metadata_mut()
@@ -114,6 +125,7 @@ impl GatewayService for Gateway {
                 metadata: gw.properties.into_hashmap(),
                 stats_interval: gw.stats_interval_secs as u32,
                 downlink_priority: gw.downlink_priority as u32,
+                gateway_type: gw.gateway_type as i32,
             }),
             created_at: Some(helpers::datetime_to_prost_timestamp(&gw.created_at)),
             updated_at: Some(helpers::datetime_to_prost_timestamp(&gw.updated_at)),
@@ -152,6 +164,14 @@ impl GatewayService for Gateway {
             None => (0.0, 0.0, 0.0),
         };
 
+        let existing = gateway::get(&gw_id).await.map_err(|e| e.status())?;
+        if req_gw.gateway_type != existing.gateway_type as i32 {
+            return Err(Status::invalid_argument("gateway type cannot be changed"));
+        }
+        if existing.gateway_type == 1 {
+            crate::mioty::update_gateway(&existing, req_gw).await?;
+        }
+
         // update
         let _ = gateway::update(gateway::Gateway {
             gateway_id: gw_id,
@@ -189,6 +209,10 @@ impl GatewayService for Gateway {
             )
             .await?;
 
+        let existing = gateway::get(&gw_id).await.map_err(|e| e.status())?;
+        if existing.gateway_type == 1 {
+            crate::mioty::delete_gateway(&existing).await?;
+        }
         gateway::delete(&gw_id).await.map_err(|e| e.status())?;
 
         let mut resp = Response::new(());
@@ -292,6 +316,7 @@ impl GatewayService for Gateway {
                     }
                     .into(),
                     downlink_priority: gw.downlink_priority as u32,
+                    gateway_type: gw.gateway_type as i32,
                 })
                 .collect(),
         });

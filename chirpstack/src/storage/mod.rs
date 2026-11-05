@@ -29,6 +29,7 @@ pub mod gateway;
 pub mod helpers;
 pub mod mac_command;
 pub mod metrics;
+pub mod mioty;
 pub mod multicast;
 pub mod passive_roaming;
 #[cfg(feature = "postgres")]
@@ -69,6 +70,12 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations_sqlit
 pub use postgres::{AsyncPgPoolConnection as AsyncDbPoolConnection, get_async_db_conn};
 #[cfg(feature = "sqlite")]
 pub use sqlite::{AsyncSqlitePoolConnection as AsyncDbPoolConnection, get_async_db_conn};
+
+#[cfg(feature = "postgres")]
+pub type DbConnection = diesel_async::AsyncPgConnection;
+#[cfg(feature = "sqlite")]
+pub type DbConnection =
+    diesel_async::sync_connection_wrapper::SyncConnectionWrapper<diesel::SqliteConnection>;
 
 #[derive(Clone)]
 pub enum AsyncRedisPool {

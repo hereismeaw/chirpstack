@@ -22,6 +22,7 @@ pub async fn run() -> Result<()> {
     gateway::backend::setup().await?;
     downlink::setup().await;
     fuota::setup().await;
+    crate::mioty::setup().await?;
     api::setup().await?;
 
     let mut signals = Signals::new([SIGINT, SIGTERM]).unwrap();

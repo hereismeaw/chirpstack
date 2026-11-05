@@ -1,6 +1,6 @@
 import { Children, useState } from "react";
 
-import { Form, Input, Row, Col, Button, Tabs, Switch, Modal, Space, notification } from "antd";
+import { Form, Input, Row, Col, Button, Tabs, Switch, Modal, Space, notification, Select, InputNumber } from "antd";
 import type { TabsProps } from "antd/lib";
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { Scanner } from "@yudiel/react-qr-scanner";
@@ -12,7 +12,7 @@ import {
   DeviceProfile,
 } from "@chirpstack/chirpstack-api-grpc-web/api/device_profile_pb";
 import type { Tenant } from "@chirpstack/chirpstack-api-grpc-web/api/tenant_pb";
-import { Device } from "@chirpstack/chirpstack-api-grpc-web/api/device_pb";
+import { Device, DeviceType, MiotyDevice } from "@chirpstack/chirpstack-api-grpc-web/api/device_pb";
 
 import { onFinishFailed } from "../helpers";
 import EuiInput from "../../components/EuiInput";
@@ -29,6 +29,9 @@ interface IProps {
 
 function DeviceForm(props: IProps) {
   const [form] = Form.useForm();
+  const deviceType = Form.useWatch("deviceType", form) ?? props.initialValues.getDeviceType();
+  const isMioty = deviceType === DeviceType.MIOTY_DEVICE;
+  const applicationCrypto = Form.useWatch(["mioty", "applicationCrypto"], form) ?? props.initialValues.getMioty()?.getApplicationCrypto() ?? 0;
   const [showScanner, setShowScanner] = useState(false);
   const [deviceProfileId, setDeviceProfileId] = useState<string | null>(null);
 
@@ -40,6 +43,21 @@ function DeviceForm(props: IProps) {
     d.setName(v.name);
     d.setDescription(v.description);
     d.setDevEui(v.devEui);
+    d.setDeviceType(v.deviceType);
+    if (v.deviceType === DeviceType.MIOTY_DEVICE && v.mioty) {
+      const settings = new MiotyDevice();
+      settings.setEpClass(v.mioty.epClass);
+      settings.setShortAddress(v.mioty.shortAddress);
+      settings.setNetworkKey(v.mioty.networkKey || "");
+      settings.setApplicationKey(v.mioty.applicationKey || "");
+      settings.setPreAttach(v.mioty.preAttach);
+      settings.setApplicationCrypto(v.mioty.applicationCrypto);
+      settings.setDualChannel(v.mioty.dualChannel);
+      settings.setRepetition(v.mioty.repetition);
+      settings.setWideCarrierOffset(v.mioty.wideCarrierOffset);
+      settings.setLongBlockDistance(v.mioty.longBlockDistance);
+      d.setMioty(settings);
+    }
     d.setDeviceProfileId(v.deviceProfileId[v.deviceProfileId.length - 1]);
     d.setIsDisabled(v.isDisabled);
     d.setSkipFcntCheck(v.skipFcntCheck);
@@ -106,6 +124,52 @@ function DeviceForm(props: IProps) {
       label: "Device",
       children: (
         <>
+          <Form.Item label="Device type" name="deviceType" rules={[{ required: true }]}>
+            <Select disabled={props.update || props.disabled} options={[
+              { value: DeviceType.LORAWAN_DEVICE, label: "LoRaWAN Device" },
+              { value: DeviceType.MIOTY_DEVICE, label: "Mioty Device" },
+            ]} />
+          </Form.Item>
+          {isMioty && <>
+            <Form.Item label="Endpoint class" name={["mioty", "epClass"]} rules={[{ required: true }]}>
+              <Select disabled={props.disabled} options={[{ value: "Z", label: "Z (unidirectional)" }, { value: "A", label: "A (bidirectional)" }]} />
+            </Form.Item>
+            <Form.Item label="Short address" name={["mioty", "shortAddress"]} rules={[{ required: true }]}>
+              <InputNumber min={0} max={65535} disabled={props.disabled} />
+            </Form.Item>
+            <Form.Item label="Pre-attach" name={["mioty", "preAttach"]} valuePropName="checked" extra="Use pre-attachment. Over-the-air attachment is not supported yet.">
+              <Switch disabled={props.disabled} />
+            </Form.Item>
+            <Form.Item label="Network key" name={["mioty", "networkKey"]}
+              extra={props.update ? "Leave empty to keep the current key." : undefined}
+              rules={[{ required: !props.update }, { pattern: /^[a-fA-F0-9]{32}$/, message: "Enter 32 hexadecimal characters." }]}>
+              <Input.Password autoComplete="new-password" disabled={props.disabled} />
+            </Form.Item>
+            <Form.Item label="Application cryptography" name={["mioty", "applicationCrypto"]} rules={[{ required: true }]}>
+              <Select disabled={props.disabled} options={[
+                { value: 0, label: "None (0)" },
+                { value: 1, label: "Confidentiality (1)" },
+                { value: 17, label: "Confidentiality and authenticity (17)" },
+              ]} />
+            </Form.Item>
+            <Form.Item label="Application key" name={["mioty", "applicationKey"]}
+              extra={props.update ? "Leave empty to keep the current key." : undefined}
+              rules={[{ required: !props.update && applicationCrypto !== 0 }, { pattern: /^[a-fA-F0-9]{32}$/, message: "Enter 32 hexadecimal characters." }]}>
+              <Input.Password autoComplete="new-password" disabled={props.disabled} />
+            </Form.Item>
+            <Form.Item label="Dual channel" name={["mioty", "dualChannel"]} valuePropName="checked">
+              <Switch disabled={props.disabled} />
+            </Form.Item>
+            <Form.Item label="Downlink repetition" name={["mioty", "repetition"]} valuePropName="checked">
+              <Switch disabled={props.disabled} />
+            </Form.Item>
+            <Form.Item label="Wide carrier offset" name={["mioty", "wideCarrierOffset"]} valuePropName="checked">
+              <Switch disabled={props.disabled} />
+            </Form.Item>
+            <Form.Item label="Long downlink block distance" name={["mioty", "longBlockDistance"]} valuePropName="checked">
+              <Switch disabled={props.disabled} />
+            </Form.Item>
+          </>}
           <Form.Item label="Name" name="name" rules={[{ required: true, message: "Please enter a name!" }]}>
             <Input disabled={props.disabled} />
           </Form.Item>
@@ -117,14 +181,15 @@ function DeviceForm(props: IProps) {
               <EuiInput label="Device EUI (EUI64)" name="devEui" disabled={props.update} required />
             </Col>
             <Col span={12}>
-              <EuiInput
+              {!isMioty && <EuiInput
                 label="Join EUI (EUI64)"
                 name="joinEui"
                 tooltip="The Join EUI will be automatically set / updated on OTAA. However, in some cases this field must be configured before OTAA (e.g. OTAA using a Relay)."
                 disabled={props.disabled}
-              />
+              />}
             </Col>
           </Row>
+          {isMioty && <p>The device profile supplies payload codecs and integration settings for this endpoint.</p>}
           <DeviceProfileSelect
             label="Device profile"
             name="deviceProfileId"
@@ -146,6 +211,7 @@ function DeviceForm(props: IProps) {
             </Col>
             <Col span={12}>
               <Form.Item
+                hidden={isMioty}
                 label="Disable frame-counter validation"
                 name="skipFcntCheck"
                 valuePropName="checked"
@@ -243,7 +309,10 @@ function DeviceForm(props: IProps) {
   return (
     <Form
       layout="vertical"
-      initialValues={props.initialValues.toObject()}
+      initialValues={{ ...props.initialValues.toObject(), mioty: props.initialValues.getMioty()?.toObject() || {
+        epClass: "Z", shortAddress: 0, networkKey: "", applicationKey: "", preAttach: true,
+        applicationCrypto: 0, dualChannel: false, repetition: false, wideCarrierOffset: false, longBlockDistance: false,
+      } }}
       onFinish={onFinish}
       onFinishFailed={onFinishFailed}
       form={form}

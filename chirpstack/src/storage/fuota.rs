@@ -412,6 +412,7 @@ pub async fn add_devices(fuota_deployment_id: Uuid, dev_euis: Vec<EUI64>) -> Res
         .filter(application::dsl::id.eq(fuota_deployment::dsl::application_id))
         .filter(fuota_deployment::dsl::id.eq(fields::Uuid::from(fuota_deployment_id)))
         .filter(device::dsl::dev_eui.eq_any(&dev_euis))
+        .filter(device::device_type.eq(0))
         .load(&mut get_async_db_conn().await?)
         .await
         .map_err(|e| Error::from_diesel(e, "".into()))?;

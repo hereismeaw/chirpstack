@@ -99,6 +99,12 @@ enum GatewayState {
   OFFLINE = 2;
 }
 
+// Radio technology of a gateway. Existing gateways default to LoRaWAN.
+enum GatewayType {
+  LORAWAN = 0;
+  MIOTY = 1;
+}
+
 message Gateway {
   // Gateway ID (EUI64).
   string gateway_id = 1;
@@ -131,6 +137,8 @@ message Gateway {
   // and an user-defined downlink priority which can be used as a positive or
   // negative bias in the downlink gateway selection.
   uint32 downlink_priority = 9;
+
+  GatewayType gateway_type = 10;
 }
 
 message GatewayListItem {
@@ -171,6 +179,8 @@ message GatewayListItem {
   // and an user-defined downlink priority which can be used as a positive or
   // negative bias in the downlink gateway selection.
   uint32 downlink_priority = 11;
+
+  GatewayType gateway_type = 12;
 }
 
 message CreateGatewayRequest {

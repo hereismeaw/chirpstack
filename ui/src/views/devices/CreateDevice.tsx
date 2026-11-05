@@ -4,7 +4,7 @@ import { Space, Breadcrumb, Card } from "antd";
 
 import type { Tenant } from "@chirpstack/chirpstack-api-grpc-web/api/tenant_pb";
 import type { Application } from "@chirpstack/chirpstack-api-grpc-web/api/application_pb";
-import { CreateDeviceRequest, Device } from "@chirpstack/chirpstack-api-grpc-web/api/device_pb";
+import { CreateDeviceRequest, Device, DeviceType } from "@chirpstack/chirpstack-api-grpc-web/api/device_pb";
 import type { GetDeviceProfileResponse } from "@chirpstack/chirpstack-api-grpc-web/api/device_profile_pb";
 import { GetDeviceProfileRequest } from "@chirpstack/chirpstack-api-grpc-web/api/device_profile_pb";
 
@@ -35,7 +35,7 @@ function CreateDevice(props: IProps) {
 
       DeviceProfileStore.get(req, (resp: GetDeviceProfileResponse) => {
         const dp = resp.getDeviceProfile()!;
-        if (dp.getSupportsOtaa()) {
+        if (obj.getDeviceType() !== DeviceType.MIOTY_DEVICE && dp.getSupportsOtaa()) {
           navigate(
             `/tenants/${props.tenant.getId()}/applications/${props.application.getId()}/devices/${obj.getDevEui()}/keys`,
           );

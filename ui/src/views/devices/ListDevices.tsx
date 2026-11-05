@@ -1,3 +1,4 @@
+import { DeviceType } from "@chirpstack/chirpstack-api-grpc-web/api/device_pb";
 import { useState, useEffect } from "react";
 import { Link } from "react-router";
 
@@ -140,6 +141,12 @@ function ListDevices(props: IProps) {
         </Link>
       ),
       sorter: true,
+    },
+    {
+      title: "Device type",
+      dataIndex: "deviceType",
+      key: "deviceType",
+      render: value => value === DeviceType.MIOTY_DEVICE ? "Mioty Device" : "LoRaWAN Device",
     },
     {
       title: "Name",

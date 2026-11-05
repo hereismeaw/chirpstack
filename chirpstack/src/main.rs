@@ -32,6 +32,7 @@ mod gpstime;
 mod helpers;
 mod integration;
 mod maccommand;
+mod mioty;
 mod monitoring;
 mod region;
 mod sensitivity;

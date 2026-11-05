@@ -24,6 +24,24 @@ pub fn run() {
   flatten_json={{ logging.flatten_json }}
 
 
+# Native MIOTY Base Station Service Center Interface.
+[mioty]
+
+  enabled={{ mioty.enabled }}
+  bind="{{ mioty.bind }}"
+  service_center_eui="{{ mioty.service_center_eui }}"
+
+  # PEM server certificate and private key. Gateways must trust its issuer.
+  server_cert="{{ mioty.server_cert }}"
+  server_key="{{ mioty.server_key }}"
+
+  # Client certificates are verified using gateway.ca_cert and must match
+  # the certificate provisioned for the registered Mioty gateway.
+  max_frame_size={{ mioty.max_frame_size }}
+  max_connections={{ mioty.max_connections }}
+  idle_timeout_secs={{ mioty.idle_timeout_secs }}
+
+
 # PostgreSQL configuration.
 #
 # Note: this option is only available to ChirpStack with PostgreSQL support (default).

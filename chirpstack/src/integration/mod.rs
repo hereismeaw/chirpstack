@@ -202,7 +202,7 @@ pub async fn uplink_event(
     });
 }
 
-async fn _uplink_event(
+pub(crate) async fn _uplink_event(
     application_id: Uuid,
     vars: &HashMap<String, String>,
     pl: &integration::UplinkEvent,
@@ -328,7 +328,7 @@ pub async fn txack_event(
     });
 }
 
-async fn _txack_event(
+pub(crate) async fn _txack_event(
     application_id: Uuid,
     vars: &HashMap<String, String>,
     pl: &integration::TxAckEvent,
@@ -370,7 +370,7 @@ pub async fn log_event(
     });
 }
 
-async fn _log_event(
+pub(crate) async fn _log_event(
     application_id: Uuid,
     vars: &HashMap<String, String>,
     pl: &integration::LogEvent,
@@ -508,6 +508,16 @@ async fn handle_down_command(application_id: String, pl: integration::DownlinkCo
                 &codec::convert::pb_json_to_prost(obj),
             )
             .await?;
+        }
+
+        if dev.device_type == 1 {
+            if pl.f_port != 0 || pl.confirmed || pl.expires_at.is_some() || !pl.id.is_empty() {
+                return Err(anyhow!(
+                    "MIOTY downlinks require fPort=0, confirmed=false, without expiry or caller ID"
+                ));
+            }
+            crate::mioty::send_downlink(&dev, data).await?;
+            return Ok(());
         }
 
         let qi = device_queue::DeviceQueueItem {

@@ -121,6 +121,7 @@ pub struct Device {
     pub device_session: Option<fields::DeviceSession>,
     pub app_layer_params: fields::device::AppLayerParams,
     pub f_cnt_up: i64,
+    pub device_type: i16,
 }
 
 #[derive(AsChangeset, Debug, Clone, Default)]
@@ -199,6 +200,7 @@ impl Default for Device {
             device_session: None,
             app_layer_params: Default::default(),
             f_cnt_up: 0,
+            device_type: 0,
         }
     }
 }
@@ -217,6 +219,7 @@ pub struct DeviceListItem {
     pub external_power_source: bool,
     pub battery_level: Option<fields::BigDecimal>,
     pub tags: fields::KeyValue,
+    pub device_type: i16,
 }
 
 #[derive(Default, Clone)]
@@ -255,6 +258,14 @@ pub struct DevicesDataRate {
 }
 
 pub async fn create(d: Device) -> Result<Device, Error> {
+    create_with_mioty(d, None).await
+}
+
+pub async fn create_with_mioty(
+    d: Device,
+    endpoint: Option<super::mioty::Endpoint>,
+) -> Result<Device, Error> {
+    d.validate()?;
     let mut c = get_async_db_conn().await?;
     let d: Device = c
         .transaction::<Device, Error, _>(async |c| {
@@ -280,11 +291,18 @@ pub async fn create(d: Device) -> Result<Device, Error> {
                 ));
             }
 
-            diesel::insert_into(device::table)
+            let created = diesel::insert_into(device::table)
                 .values(&d)
                 .get_result(c)
                 .await
-                .map_err(|e| Error::from_diesel(e, d.dev_eui.to_string()))
+                .map_err(|e| Error::from_diesel(e, d.dev_eui.to_string()))?;
+            if let Some(endpoint) = endpoint {
+                diesel::insert_into(super::schema::mioty_device::table)
+                    .values(&endpoint)
+                    .execute(c)
+                    .await?;
+            }
+            Ok(created)
         })
         .await?;
     info!(dev_eui = %d.dev_eui, "Device created");
@@ -337,6 +355,7 @@ pub async fn get_for_phypayload_and_incr_f_cnt_up(
                 .or(device::dsl::secondary_dev_addr.eq(&dev_addr)),
         )
         .filter(device::dsl::is_disabled.eq(false))
+        .filter(device::device_type.eq(0))
         .load(&mut get_async_db_conn().await?)
         .await?;
 
@@ -521,6 +540,7 @@ pub async fn get_for_phypayload(
                 .or(device::dsl::secondary_dev_addr.eq(&dev_addr)),
         )
         .filter(device::dsl::is_disabled.eq(false))
+        .filter(device::device_type.eq(0))
         .load(&mut get_async_db_conn().await?)
         .await?;
 
@@ -585,6 +605,13 @@ pub async fn get_for_phypayload(
 }
 
 pub async fn update(d: Device) -> Result<Device, Error> {
+    update_with_conn(d, &mut *get_async_db_conn().await?).await
+}
+
+pub(super) async fn update_with_conn(
+    d: Device,
+    conn: &mut super::DbConnection,
+) -> Result<Device, Error> {
     d.validate()?;
 
     let d: Device = diesel::update(device::dsl::device.find(&d.dev_eui))
@@ -601,7 +628,7 @@ pub async fn update(d: Device) -> Result<Device, Error> {
             device::join_eui.eq(&d.join_eui),
             device::app_layer_params.eq(&d.app_layer_params),
         ))
-        .get_result(&mut get_async_db_conn().await?)
+        .get_result(conn)
         .await
         .map_err(|e| Error::from_diesel(e, d.dev_eui.to_string()))?;
     info!(dev_eui = %d.dev_eui, "Device updated");
@@ -742,6 +769,7 @@ pub async fn list(
             device::external_power_source,
             device::battery_level,
             device::tags,
+            device::device_type,
         ))
         .distinct()
         .into_boxed();
@@ -985,6 +1013,7 @@ pub async fn get_with_class_b_c_queue_items(limit: usize) -> Result<Vec<Device>>
                                 device d
                             where
                                 d.enabled_class in ('B', 'C')
+                                and d.device_type = 0
                                 and (d.scheduler_run_after is null or d.scheduler_run_after < ?2)
                                 and d.is_disabled = FALSE
                                 and exists (
@@ -1018,6 +1047,7 @@ pub async fn get_with_class_b_c_queue_items(limit: usize) -> Result<Vec<Device>>
                                 device d
                             where
                                 d.enabled_class in ('B', 'C')
+                                and d.device_type = 0
                                 and (d.scheduler_run_after is null or d.scheduler_run_after < $2)
                                 and d.is_disabled = false
                                 and exists (

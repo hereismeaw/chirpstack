@@ -148,6 +148,27 @@ service DeviceService {
   }
 }
 
+enum DeviceType {
+  LORAWAN_DEVICE = 0;
+  MIOTY_DEVICE = 1;
+}
+
+// MIOTY endpoint settings. Keys are write-only hexadecimal AES-128 values;
+// empty keys on update preserve the existing keys.
+message MiotyDevice {
+  string ep_class = 1;
+  uint32 short_address = 2;
+  string network_key = 3;
+  string application_key = 4;
+  bool pre_attach = 5;
+  bool dual_channel = 6;
+  bool repetition = 7;
+  bool wide_carrier_offset = 8;
+  bool long_block_distance = 9;
+  // Application crypto: 0 = none, 1 = confidentiality, 17 = authenticity.
+  uint32 application_crypto = 10;
+}
+
 message Device {
   // DevEUI (EUI64).
   string dev_eui = 1;
@@ -188,6 +209,9 @@ message Device {
   // In this case the Relay needs to know the JoinEUI + DevEUI combinations
   // of the devices for which it needs to forward uplinks.
   string join_eui = 10;
+
+  DeviceType device_type = 11;
+  MiotyDevice mioty = 12;
 }
 
 message DeviceStatus {
@@ -230,6 +254,8 @@ message DeviceListItem {
 
   // Device status.
   DeviceStatus device_status = 9;
+
+  DeviceType device_type = 11;
 
   // Device tags.
   map<string, string> tags = 10;

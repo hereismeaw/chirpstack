@@ -18,6 +18,7 @@ import {
   GetDeviceQueueItemsRequest,
   FlushDeviceQueueRequest,
   DeviceQueueItem,
+  DeviceType,
 } from "@chirpstack/chirpstack-api-grpc-web/api/device_pb";
 
 import { onFinishFailed } from "../helpers";
@@ -42,6 +43,7 @@ interface FormRules {
 }
 
 function DeviceQueue(props: IProps) {
+  const isMioty = props.device.getDeviceType() === DeviceType.MIOTY_DEVICE;
   const [refreshCounter, setRefreshCounter] = useState<number>(0);
   const [isEncrypted, setIsEncrypted] = useState<boolean>(false);
   const [form] = Form.useForm<FormRules>();
@@ -170,10 +172,10 @@ function DeviceQueue(props: IProps) {
     const item = new DeviceQueueItem();
 
     item.setDevEui(props.device.getDevEui());
-    item.setFPort(values.fPort);
-    item.setConfirmed(values.confirmed);
-    item.setIsEncrypted(values.isEncrypted);
-    item.setFCntDown(values.fCntDown);
+    item.setFPort(isMioty ? 0 : values.fPort);
+    item.setConfirmed(isMioty ? false : values.confirmed);
+    item.setIsEncrypted(isMioty ? false : values.isEncrypted);
+    item.setFCntDown(isMioty ? 0 : values.fCntDown);
 
     if (values.expiresAt !== null && values.expiresAt !== undefined && !Array.isArray(values.expiresAt)) {
       item.setExpiresAt(Timestamp.fromDate(values.expiresAt.toDate()));
@@ -249,7 +251,7 @@ function DeviceQueue(props: IProps) {
           form={form}
           initialValues={{ fPort: 1 }}
         >
-          <Row>
+          {!isMioty && <Row>
             <Space orientation="horizontal" style={{ width: "100%" }} size="large">
               <Form.Item name="confirmed" label="Confirmed" valuePropName="checked">
                 <Switch />
@@ -282,7 +284,8 @@ function DeviceQueue(props: IProps) {
                 <DatePicker showTime />
               </Form.Item>
             </Space>
-          </Row>
+          </Row>}
+          {isMioty && <p>Downlinks are delivered through a Mioty receive window. The endpoint must support bidirectional communication.</p>}
           <Tabs defaultActiveKey="1" items={tabItems} />
           <Button type="primary" htmlType="submit">
             Enqueue
@@ -299,7 +302,7 @@ function DeviceQueue(props: IProps) {
           </Popconfirm>
         </Space>
       </Row>
-      <DataTable columns={columns} getPage={getPage} refreshKey={refreshCounter} rowKey="id" noPagination />
+      <DataTable columns={isMioty ? columns.filter(col => !["isEncrypted", "fCntDown", "fPort", "expiresAt"].includes(String(col.key))) : columns} getPage={getPage} refreshKey={refreshCounter} rowKey="id" noPagination />
     </Space>
   );
 }

@@ -68,6 +68,7 @@ diesel::table! {
         device_session -> Nullable<Bytea>,
         app_layer_params -> Jsonb,
         f_cnt_up -> Int8,
+        device_type -> Int2,
     }
 }
 
@@ -307,6 +308,7 @@ diesel::table! {
         tags -> Jsonb,
         properties -> Jsonb,
         downlink_priority -> Int2,
+        gateway_type -> Int2,
     }
 }
 
@@ -486,6 +488,9 @@ diesel::joinable!(tenant_user_device_profile -> device_profile (device_profile_i
 diesel::joinable!(tenant_user_device_profile -> user (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    mioty_device,
+    mioty_downlink,
+    mioty_event,
     api_key,
     application,
     application_integration,
@@ -513,3 +518,46 @@ diesel::allow_tables_to_appear_in_same_query!(
     tenant_user_device_profile,
     user,
 );
+
+diesel::table! {
+    mioty_device (dev_eui) {
+        dev_eui -> Bytea,
+        ep_class -> Text,
+        short_address -> Int4,
+        network_key -> Bytea,
+        application_key -> Bytea,
+        session_key -> Bytea,
+        application_crypto -> Int2,
+        session_context -> Bytea,
+        attach_counter -> Int8,
+        last_packet_counter -> Int8,
+        last_downlink_counter -> Int8,
+        pre_attach -> Bool,
+        attached -> Bool,
+        radio_flags -> Int2,
+        serving_gateway -> Nullable<Bytea>,
+    }
+}
+diesel::joinable!(mioty_device -> device (dev_eui));
+
+diesel::table! {
+    mioty_downlink (dev_eui) {
+        dev_eui -> Bytea,
+        queue_item_id -> Uuid,
+        gateway_id -> Bytea,
+        queue_id -> Int8,
+        packet_counter -> Int8,
+    }
+}
+diesel::table! {
+    mioty_event (id) {
+        id -> Uuid,
+        application_id -> Uuid,
+        payload -> Bytea,
+        variables -> Text,
+        ready_at -> Timestamptz,
+        lease_until -> Timestamptz,
+        kind -> Text,
+        rx_key -> Nullable<Text>,
+    }
+}
