@@ -55,6 +55,8 @@ import MulticastGroupStore from "../../stores/MulticastGroupStore";
 import FuotaStore from "../../stores/FuotaStore";
 import RelayStore from "../../stores/RelayStore";
 import Admin from "../../components/Admin";
+import ProtocolTag from "../../components/ProtocolTag";
+import { deviceProtocol } from "../../lib/protocol";
 import { MenuProps } from "antd/lib";
 
 interface IProps {
@@ -127,7 +129,7 @@ function ListDevices(props: IProps) {
       sorter: true,
     },
     {
-      title: "DevEUI",
+      title: "DevEUI / End Point EUI",
       dataIndex: "devEui",
       key: "devEui",
       width: 250,
@@ -143,10 +145,16 @@ function ListDevices(props: IProps) {
       sorter: true,
     },
     {
-      title: "Device type",
+      title: "Technology",
       dataIndex: "deviceType",
       key: "deviceType",
-      render: value => value === DeviceType.MIOTY_DEVICE ? "Mioty Device" : "LoRaWAN Device",
+      width: 140,
+      render: (value: DeviceType) => <ProtocolTag protocol={deviceProtocol(value)} />,
+      filterMultiple: false,
+      filters: [
+        { text: "LoRaWAN", value: DeviceType.LORAWAN_DEVICE },
+        { text: "mioty", value: DeviceType.MIOTY_DEVICE },
+      ],
     },
     {
       title: "Name",
@@ -264,6 +272,11 @@ function ListDevices(props: IProps) {
     req.setOffset(offset);
     req.setOrderBy(getOrderBy(orderBy));
     req.setOrderByDesc(orderByDesc || false);
+
+    // Technology filter (server-side). No selection lists both technologies.
+    if (Array.isArray(f.deviceType) && f.deviceType.length > 0) {
+      req.setDeviceType(f.deviceType[0] as DeviceType);
+    }
 
     {
       let tagsFilter = f.tags;

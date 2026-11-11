@@ -161,6 +161,9 @@ impl DeviceProfileService for DeviceProfile {
                     .map(|&v| Some(v as i16))
                     .collect(),
             ),
+            protocol: api::ProfileProtocol::try_from(req_dp.protocol)
+                .map_err(|_| Status::invalid_argument("invalid protocol"))?
+                as i16,
             ..Default::default()
         };
 
@@ -284,6 +287,7 @@ impl DeviceProfileService for DeviceProfile {
                 }),
                 device_id: dp.device_id.map(|v| v.to_string()).unwrap_or_default(),
                 firmware_version: dp.firmware_version.clone(),
+                protocol: dp.protocol.into(),
                 supported_uplink_data_rates: dp
                     .supported_uplink_data_rates
                     .iter()
@@ -408,6 +412,7 @@ impl DeviceProfileService for DeviceProfile {
                 }),
                 device_id: dp.device_id.map(|v| v.to_string()).unwrap_or_default(),
                 firmware_version: dp.firmware_version.clone(),
+                protocol: dp.protocol.into(),
                 supported_uplink_data_rates: dp
                     .supported_uplink_data_rates
                     .iter()
@@ -445,6 +450,27 @@ impl DeviceProfileService for DeviceProfile {
                 validator::ValidateDeviceProfileAccess::new(validator::Flag::Update, dp_id),
             )
             .await?;
+
+        // A device-profile that LoRaWAN devices rely on for their MAC
+        // configuration cannot be turned into a mioty device-profile.
+        let existing = device_profile::get(&dp_id.into())
+            .await
+            .map_err(|e| e.status())?;
+        if existing.protocol == 0 && req_dp.protocol != 0 {
+            let lorawan_devices =
+                crate::storage::device::get_count(&crate::storage::device::Filters {
+                    device_profile_id: Some(dp_id),
+                    device_type: Some(0),
+                    ..Default::default()
+                })
+                .await
+                .map_err(|e| e.status())?;
+            if lorawan_devices > 0 {
+                return Err(Status::failed_precondition(
+                    "device-profile is used by LoRaWAN devices and cannot become a mioty device-profile",
+                ));
+            }
+        }
 
         // update
         let _ = device_profile::update(device_profile::DeviceProfile {
@@ -563,6 +589,9 @@ impl DeviceProfileService for DeviceProfile {
                     .map(|&v| Some(v as i16))
                     .collect(),
             ),
+            protocol: api::ProfileProtocol::try_from(req_dp.protocol)
+                .map_err(|_| Status::invalid_argument("invalid protocol"))?
+                as i16,
             ..Default::default()
         })
         .await
@@ -668,6 +697,7 @@ impl DeviceProfileService for DeviceProfile {
                     device_id: dp.device_id.map(|v| v.to_string()).unwrap_or_default(),
                     device_name: dp.device_name.clone().unwrap_or_default(),
                     firmware_version: dp.firmware_version.clone(),
+                    protocol: dp.protocol.into(),
                 })
                 .collect(),
         });
@@ -1215,6 +1245,171 @@ pub mod test {
         let list_resp = service.list_vendors(list_req).await.unwrap();
         let list_resp = list_resp.get_ref();
         assert_eq!(0, list_resp.total_count);
+    }
+
+    #[tokio::test]
+    async fn test_device_profile_protocol() {
+        let _guard = test::prepare().await;
+
+        let u = user::create(user::User {
+            is_admin: true,
+            is_active: true,
+            email: "admin@admin".into(),
+            email_verified: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let t = tenant::create(tenant::Tenant {
+            name: "test-tenant".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let service = DeviceProfile::new(RequestValidator::new());
+
+        // A mioty device-profile is persisted and returned by get and list.
+        let create_resp = service
+            .create(get_request(
+                &u.id,
+                api::CreateDeviceProfileRequest {
+                    device_profile: Some(api::DeviceProfile {
+                        tenant_id: t.id.to_string(),
+                        name: "mioty-dp".into(),
+                        protocol: api::ProfileProtocol::ProfileMioty.into(),
+                        ..Default::default()
+                    }),
+                },
+            ))
+            .await
+            .unwrap();
+        let mioty_id = create_resp.get_ref().id.clone();
+        let get_resp = service
+            .get(get_request(
+                &u.id,
+                api::GetDeviceProfileRequest {
+                    id: mioty_id.clone(),
+                },
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            api::ProfileProtocol::ProfileMioty,
+            get_resp
+                .get_ref()
+                .device_profile
+                .as_ref()
+                .unwrap()
+                .protocol()
+        );
+        let list_resp = service
+            .list(get_request(
+                &u.id,
+                api::ListDeviceProfilesRequest {
+                    tenant_id: t.id.to_string(),
+                    limit: 10,
+                    ..Default::default()
+                },
+            ))
+            .await
+            .unwrap();
+        assert_eq!(1, list_resp.get_ref().total_count);
+        assert_eq!(
+            api::ProfileProtocol::ProfileMioty,
+            list_resp.get_ref().result[0].protocol()
+        );
+
+        // Unknown values must not wrap into a supported i16 database value.
+        for invalid_protocol in [7, 65_536, -65_536] {
+            assert!(
+                service
+                    .create(get_request(
+                        &u.id,
+                        api::CreateDeviceProfileRequest {
+                            device_profile: Some(api::DeviceProfile {
+                                tenant_id: t.id.to_string(),
+                                name: "invalid-dp".into(),
+                                protocol: invalid_protocol,
+                                ..Default::default()
+                            }),
+                        },
+                    ))
+                    .await
+                    .is_err()
+            );
+        }
+
+        // Existing behavior: the protocol defaults to LoRaWAN.
+        let create_resp = service
+            .create(get_request(
+                &u.id,
+                api::CreateDeviceProfileRequest {
+                    device_profile: Some(api::DeviceProfile {
+                        tenant_id: t.id.to_string(),
+                        name: "lorawan-dp".into(),
+                        ..Default::default()
+                    }),
+                },
+            ))
+            .await
+            .unwrap();
+        let lorawan_id = create_resp.get_ref().id.clone();
+        let lorawan_uuid = Uuid::from_str(&lorawan_id).unwrap();
+        let stored = device_profile::get(&lorawan_uuid.into()).await.unwrap();
+        assert_eq!(0, stored.protocol);
+
+        // A profile used by a LoRaWAN device cannot become a mioty profile.
+        let app = crate::storage::application::create(crate::storage::application::Application {
+            name: "test-app".into(),
+            tenant_id: t.id,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let dev = crate::storage::device::create(crate::storage::device::Device {
+            name: "lorawan-device".into(),
+            application_id: app.id,
+            device_profile_id: lorawan_uuid.into(),
+            dev_eui: lrwn::EUI64::from_be_bytes([1, 2, 3, 4, 5, 6, 7, 8]),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let to_mioty = || api::UpdateDeviceProfileRequest {
+            device_profile: Some(api::DeviceProfile {
+                id: lorawan_id.clone(),
+                tenant_id: t.id.to_string(),
+                name: "lorawan-dp".into(),
+                protocol: api::ProfileProtocol::ProfileMioty.into(),
+                ..Default::default()
+            }),
+        };
+        let err = service
+            .update(get_request(&u.id, to_mioty()))
+            .await
+            .unwrap_err();
+        assert_eq!(tonic::Code::FailedPrecondition, err.code());
+        assert_eq!(
+            0,
+            device_profile::get(&lorawan_uuid.into())
+                .await
+                .unwrap()
+                .protocol
+        );
+
+        // Once no LoRaWAN device uses it, the change is accepted.
+        crate::storage::device::delete(&dev.dev_eui).await.unwrap();
+        service
+            .update(get_request(&u.id, to_mioty()))
+            .await
+            .unwrap();
+        assert_eq!(
+            1,
+            device_profile::get(&lorawan_uuid.into())
+                .await
+                .unwrap()
+                .protocol
+        );
     }
 
     fn get_request<T>(user_id: &Uuid, req: T) -> Request<T> {

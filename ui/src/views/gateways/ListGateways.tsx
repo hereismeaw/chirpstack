@@ -33,6 +33,8 @@ import FuotaStore from "../../stores/FuotaStore";
 import Admin from "../../components/Admin";
 import { useTitle } from "../helpers";
 import PageHeader from "../../components/PageHeader";
+import ProtocolTag from "../../components/ProtocolTag";
+import { gatewayProtocol } from "../../lib/protocol";
 
 interface IProps {
   tenant: Tenant;
@@ -46,7 +48,7 @@ function ListGateways(props: IProps) {
   const [fuotaModalVisible, setFuotaModalVisible] = useState<boolean>(false);
   const [mgSelected, setMgSelected] = useState<string>("");
   const [fuotaDeploymentSelected, setFuotaDeploymentSelected] = useState<string>("");
-  useTitle("Tenants", props.tenant.getName(), "Gateways");
+  useTitle("Tenants", props.tenant.getName(), "Gateways / Base Stations");
 
   const columns: ColumnsType<GatewayListItem.AsObject> = [
     {
@@ -79,7 +81,7 @@ function ListGateways(props: IProps) {
       sorter: true,
     },
     {
-      title: "Gateway ID",
+      title: "Gateway ID / Base Station EUI",
       dataIndex: "gatewayId",
       key: "gatewayId",
       width: 250,
@@ -89,11 +91,16 @@ function ListGateways(props: IProps) {
       sorter: true,
     },
     {
-      title: "Gateway type",
+      title: "Technology",
       dataIndex: "gatewayType",
       key: "gatewayType",
-      width: 180,
-      render: value => value === GatewayType.MIOTY ? "Mioty Gateway" : "LoRaWAN Gateway",
+      width: 140,
+      render: (value: GatewayType) => <ProtocolTag protocol={gatewayProtocol(value)} />,
+      filterMultiple: false,
+      filters: [
+        { text: "LoRaWAN", value: GatewayType.LORAWAN },
+        { text: "mioty", value: GatewayType.MIOTY },
+      ],
     },
     {
       title: "Name",
@@ -214,7 +221,7 @@ function ListGateways(props: IProps) {
   const getPage = (
     limit: number,
     offset: number,
-    _filters: object,
+    filters: object,
     orderBy: string | void,
     orderByDesc: boolean | void,
     callbackFunc: GetPageCallbackFunc,
@@ -236,6 +243,12 @@ function ListGateways(props: IProps) {
     req.setOffset(offset);
     req.setOrderBy(getOrderBy(orderBy));
     req.setOrderByDesc(orderByDesc || false);
+
+    // Technology filter (server-side). No selection lists both technologies.
+    const typeFilter = (filters as { gatewayType?: GatewayType[] | null }).gatewayType;
+    if (Array.isArray(typeFilter) && typeFilter.length > 0) {
+      req.setGatewayType(typeFilter[0]);
+    }
 
     GatewayStore.list(req, (resp: ListGatewaysResponse) => {
       const obj = resp.toObject();
@@ -313,13 +326,13 @@ function ListGateways(props: IProps) {
         </Space>
       </Modal>
       <PageHeader
-        title="Gateways"
+        title="Gateways / Base Stations"
         breadcrumbRender={() => (
           <Breadcrumb
             items={[
               { title: "Tenants" },
               { title: <Link to={`/tenants/${props.tenant.getId()}`}>{props.tenant.getName()}</Link> },
-              { title: "Gateways" },
+              { title: "Gateways / Base Stations" },
             ]}
           />
         )}
@@ -327,7 +340,7 @@ function ListGateways(props: IProps) {
           <Admin tenantId={props.tenant.getId()} isGatewayAdmin key="add-gateway">
             <Space orientation="horizontal" style={{ float: "right" }}>
               <Button type="primary">
-                <Link to={`/tenants/${props.tenant.getId()}/gateways/create`}>Add gateway</Link>
+                <Link to={`/tenants/${props.tenant.getId()}/gateways/create`}>Add gateway / Base Station</Link>
               </Button>
               <Dropdown placement="bottomRight" menu={menu} trigger={["click"]} disabled={selectedRowIds.length === 0}>
                 <Button>Selected gateways</Button>

@@ -193,6 +193,34 @@ pub async fn start(conf: &config::Mioty) -> Result<std::net::SocketAddr> {
     Ok(address)
 }
 
+/// Record what the authenticated Base Station said about itself in `con`.
+/// These are self-reported strings for inventory display. They are replaced on
+/// every connect and never treated as verified hardware or RF capability.
+fn connect_properties(con: &Value, resumed: bool, properties: &mut HashMap<String, String>) {
+    for (field, key) in [
+        ("vendor", "mioty_vendor"),
+        ("model", "mioty_model"),
+        ("name", "mioty_name"),
+        ("swVersion", "mioty_sw_version"),
+        ("version", "mioty_bssci_version"),
+    ] {
+        let value: String = con
+            .get(field)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(64)
+            .collect();
+        if value.is_empty() {
+            properties.remove(key);
+        } else {
+            properties.insert(key.into(), value);
+        }
+    }
+    properties.insert("mioty_session_resumed".into(), resumed.to_string());
+}
+
 fn validate_connect(value: &Value) -> Result<EUI64> {
     anyhow::ensure!(
         value["command"] == "con" && wire::int(value, "opId")? == 0,
@@ -340,6 +368,13 @@ async fn owned_connection(
     let mut may_resume = false;
     let result = async {
         seen(&gw).await?;
+        let mut properties = gateway::get(&eui).await?.properties.into_hashmap();
+        properties.insert("mioty_bidi".into(), state.bidirectional.to_string());
+        connect_properties(con, resumed, &mut properties);
+        gateway::partial_update(eui, &gateway::GatewayChangeset {
+            properties: Some(crate::storage::fields::KeyValue::new(properties)),
+            ..Default::default()
+        }).await?;
         connection_status(&gw, "online").await?;
         if !resumed { mioty::reset_gateway_downlinks_with_lease(eui, Some(lease)).await?; }
         state.reconcile_all(&mut writer, gw, encoding).await?;
@@ -693,6 +728,9 @@ impl Session {
             // Never accept an attachment without an implemented authentication scheme.
             _ => Err(anyhow!("unsupported BSSCI operation")),
         };
+        if command == "ulData" {
+            super::metrics::uplink_result(result.is_ok());
+        }
         let response = match result {
             Ok(()) => json!({"command":format!("{command}Rsp"),"opId":id}),
             Err(err) => {
@@ -778,6 +816,27 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_properties_store_bounded_self_description_only() {
+        let mut properties = HashMap::from([
+            ("mioty_model".to_string(), "stale".to_string()),
+            ("unrelated".to_string(), "kept".to_string()),
+        ]);
+        let con = json!({
+            "command": "con", "version": "1.0.0", "vendor": "Example\u{7} Vendor",
+            "swVersion": "x".repeat(200), "name": 5, "bidi": true,
+        });
+        connect_properties(&con, true, &mut properties);
+        assert_eq!("Example Vendor", properties["mioty_vendor"]);
+        assert_eq!(64, properties["mioty_sw_version"].len());
+        assert_eq!("1.0.0", properties["mioty_bssci_version"]);
+        assert_eq!("true", properties["mioty_session_resumed"]);
+        // Absent or non-string values clear what an earlier session reported.
+        assert!(!properties.contains_key("mioty_model"));
+        assert!(!properties.contains_key("mioty_name"));
+        assert_eq!("kept", properties["unrelated"]);
+    }
     #[test]
     fn validates_connect_before_gateway_lookup() {
         let mut con = json!({"command":"con","opId":0,"version":"1.0.4","bsEui":u64::MAX,"bidi":true,"snBsUuid":vec![0;16]});
@@ -991,7 +1050,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(summary["connections"], 2);
-        assert_eq!(summary["resumed_sessions"],1);
+        assert_eq!(summary["resumed_sessions"], 1);
         assert_eq!(summary["uplinks"], 2);
         assert_eq!(summary["downlinks"], 1);
         assert_eq!(mioty::get(ep.dev_eui).await.unwrap().last_packet_counter, 2);
@@ -1168,6 +1227,89 @@ mod tests {
                 .into_hashmap()["mioty_status"],
             "offline"
         );
+    }
+
+    #[tokio::test]
+    async fn thailand_policy_delivers_uplink_without_scheduling_radio_tx() {
+        use prost::Message;
+        let _guard = crate::test::prepare().await;
+        let (dev, ep, gw) = mioty::tests::fixture().await;
+        crate::storage::mioty_rf::set(
+            gw.gateway_id,
+            &chirpstack_api::api::MiotyRfConfig {
+                profile_id: super::super::rf::PROFILE_ID.into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        crate::storage::device_queue::enqueue_item(crate::storage::device_queue::DeviceQueueItem {
+            dev_eui: dev.dev_eui,
+            data: vec![9],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        for (index, enc) in [Encoding::Json, Encoding::MessagePack]
+            .into_iter()
+            .enumerate()
+        {
+            let mut state = Session {
+                bidirectional: true,
+                ..Default::default()
+            };
+            let ul = json!({"command":"ulData","opId":1,"epEui":u64::from_be_bytes(ep.dev_eui.to_be_bytes()),
+                "rxTime":Utc::now().timestamp_nanos_opt().unwrap(),"packetCnt":index+1,"rssi":-80,"snr":6,
+                "userData":[1,2,3],"dlOpen":true,"responseExp":true,"dlAck":false});
+            let mut out = Vec::new();
+            state.message(&mut out, &gw, ul, enc).await.unwrap();
+            let mut bytes = out.as_slice();
+            assert_eq!(
+                wire::read(&mut bytes, 4096).await.unwrap().0["command"],
+                "ulDataRsp"
+            );
+            assert!(
+                bytes.is_empty(),
+                "receive-only policy emitted a radio command"
+            );
+            assert!(mioty::pending_downlink(ep.dev_eui).await.is_err());
+        }
+        assert_eq!(
+            mioty::get(ep.dev_eui).await.unwrap().last_downlink_counter,
+            -1
+        );
+        assert_eq!(
+            crate::storage::device_queue::get_for_dev_eui(&ep.dev_eui)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        // Acceptance and integration outbox are still populated in receive-only mode.
+        let mut conn = crate::storage::get_async_db_conn().await.unwrap();
+        use diesel::prelude::*;
+        use diesel_async::RunQueryDsl;
+        let payloads: Vec<Vec<u8>> = crate::storage::schema::mioty_event::table
+            .select(crate::storage::schema::mioty_event::payload)
+            .load(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(payloads.len(), 2);
+        for payload in payloads {
+            let event =
+                chirpstack_api::integration::UplinkEvent::decode(payload.as_slice()).unwrap();
+            assert_eq!(event.data, vec![1, 2, 3]);
+            let native = event.mioty.as_ref().unwrap();
+            assert!(native.packet_counter > 0);
+            assert_eq!(native.raw_user_data, vec![1, 2, 3]);
+            assert_eq!(event.f_cnt, 0);
+            assert_eq!(event.rx_info[0].metadata["regional_profile"], "TH920_925");
+            assert_eq!(
+                event.rx_info[0].metadata["regional_profile_source"],
+                "desired_policy"
+            );
+            assert!(!event.rx_info[0].metadata.contains_key("profile"));
+        }
     }
 
     #[tokio::test]

@@ -21,7 +21,12 @@ import type {
   ListRelayGatewaysResponse,
   UpdateRelayGatewayRequest,
   DeleteRelayGatewayRequest,
+  GetMiotyRfConfigRequest,
+  GetMiotyRfConfigResponse,
+  UpdateMiotyRfConfigRequest,
 } from "@chirpstack/chirpstack-api-grpc-web/api/gateway_pb";
+
+import type { RpcError } from "grpc-web";
 
 import SessionStore from "./SessionStore";
 import { HandleError } from "./helpers";
@@ -190,6 +195,50 @@ class GatewayStore extends EventEmitter {
 
       notification.success({
         message: "Relay Gateway deleted",
+        duration: 3,
+      });
+
+      callbackFunc();
+    });
+  };
+
+  // Desired mioty regional RF policy of a Base Station. The optional error
+  // callback lets a view render an inline error state (e.g. a backend that
+  // does not implement the RPC) in addition to the standard notification.
+  getMiotyRfConfig = (
+    req: GetMiotyRfConfigRequest,
+    callbackFunc: (resp: GetMiotyRfConfigResponse) => void,
+    errorFunc?: (err: RpcError) => void,
+  ) => {
+    this.client.getMiotyRfConfig(req, SessionStore.getMetadata(), (err, resp) => {
+      if (err !== null) {
+        HandleError(err);
+        if (errorFunc) {
+          errorFunc(err);
+        }
+        return;
+      }
+
+      callbackFunc(resp);
+    });
+  };
+
+  updateMiotyRfConfig = (
+    req: UpdateMiotyRfConfigRequest,
+    callbackFunc: () => void,
+    errorFunc?: (err: RpcError) => void,
+  ) => {
+    this.client.updateMiotyRfConfig(req, SessionStore.getMetadata(), err => {
+      if (err !== null) {
+        HandleError(err);
+        if (errorFunc) {
+          errorFunc(err);
+        }
+        return;
+      }
+
+      notification.success({
+        message: "RF policy updated",
         duration: 3,
       });
 

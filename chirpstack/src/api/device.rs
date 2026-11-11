@@ -23,6 +23,20 @@ use crate::storage::{
 };
 use crate::{codec, devaddr::get_random_dev_addr};
 
+/// A mioty device-profile carries no usable LoRaWAN MAC configuration.
+/// (mioty endpoints may use either kind, for compatibility with endpoints
+/// created before device-profiles had a protocol.)
+async fn reject_mioty_profile_for_lorawan(dp_id: Uuid) -> Result<(), Status> {
+    if let Ok(dp) = device_profile::get(&dp_id.into()).await
+        && dp.protocol != 0
+    {
+        return Err(Status::invalid_argument(
+            "a mioty device-profile cannot be assigned to a LoRaWAN device",
+        ));
+    }
+    Ok(())
+}
+
 pub struct Device {
     validator: validator::RequestValidator,
 }
@@ -73,6 +87,8 @@ impl DeviceService for Device {
                 .await?;
             crate::mioty::validate_device(req_d.mioty.as_ref(), true)?;
             crate::mioty::validate_profile(app_id.into(), dp_id.into()).await?;
+        } else {
+            reject_mioty_profile_for_lorawan(dp_id).await?;
         }
         let d = device::Device {
             device_type: device_type as i16,
@@ -216,6 +232,9 @@ impl DeviceService for Device {
         if existing.device_type as i32 != req_d.device_type {
             return Err(Status::invalid_argument("device type cannot be changed"));
         }
+        if existing.device_type == 0 {
+            reject_mioty_profile_for_lorawan(dp_id).await?;
+        }
         if existing.device_type == 1 && existing.application_id != fields::Uuid::from(app_id) {
             let old_app = crate::storage::application::get(&existing.application_id)
                 .await
@@ -344,6 +363,12 @@ impl DeviceService for Device {
                 Some(req.search.to_string())
             },
             tags: req.tags.clone(),
+            device_type: req
+                .device_type
+                .map(api::DeviceType::try_from)
+                .transpose()
+                .map_err(|_| Status::invalid_argument("invalid device_type"))?
+                .map(|v| v as i16),
         };
 
         let count = device::get_count(&filters).await.map_err(|e| e.status())?;
@@ -2133,6 +2158,113 @@ pub mod test {
         );
         let del_resp = service.delete(del_req).await;
         assert!(del_resp.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_protocol_filter_and_profile_guard() {
+        let _guard = test::prepare().await;
+
+        // A mioty endpoint that uses a LoRaWAN-typed (pre-existing) device-profile.
+        let (mioty_dev, _, _) = crate::storage::mioty::tests::fixture().await;
+        let app = application::get(&mioty_dev.application_id).await.unwrap();
+        let u = user::create(user::User {
+            is_admin: true,
+            is_active: true,
+            email: "admin@admin".into(),
+            email_verified: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mioty_dp = device_profile::create(device_profile::DeviceProfile {
+            name: "mioty-dp".into(),
+            tenant_id: Some(app.tenant_id),
+            protocol: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let service = Device::new(RequestValidator::new());
+
+        let lorawan = |device_profile_id: String| api::Device {
+            application_id: app.id.to_string(),
+            device_profile_id,
+            name: "lorawan-device".into(),
+            dev_eui: "0807060504030201".into(),
+            ..Default::default()
+        };
+
+        // A LoRaWAN device cannot be created with a mioty device-profile.
+        let err = service
+            .create(get_request(
+                &u.id,
+                api::CreateDeviceRequest {
+                    device: Some(lorawan(mioty_dp.id.to_string())),
+                },
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(tonic::Code::InvalidArgument, err.code());
+
+        // Existing LoRaWAN behavior is unchanged.
+        service
+            .create(get_request(
+                &u.id,
+                api::CreateDeviceRequest {
+                    device: Some(lorawan(mioty_dev.device_profile_id.to_string())),
+                },
+            ))
+            .await
+            .unwrap();
+
+        // ... and it cannot be moved to a mioty device-profile afterwards.
+        let err = service
+            .update(get_request(
+                &u.id,
+                api::UpdateDeviceRequest {
+                    device: Some(lorawan(mioty_dp.id.to_string())),
+                },
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(tonic::Code::InvalidArgument, err.code());
+
+        let list = |device_type: Option<api::DeviceType>| {
+            get_request(
+                &u.id,
+                api::ListDevicesRequest {
+                    application_id: app.id.to_string(),
+                    limit: 10,
+                    device_type: device_type.map(Into::into),
+                    ..Default::default()
+                },
+            )
+        };
+
+        // No filter: both protocols (existing behavior).
+        let resp = service.list(list(None)).await.unwrap();
+        assert_eq!(2, resp.get_ref().total_count);
+
+        let resp = service
+            .list(list(Some(api::DeviceType::MiotyDevice)))
+            .await
+            .unwrap();
+        assert_eq!(1, resp.get_ref().total_count);
+        assert_eq!(
+            mioty_dev.dev_eui.to_string(),
+            resp.get_ref().result[0].dev_eui
+        );
+        assert_eq!(
+            api::DeviceType::MiotyDevice,
+            resp.get_ref().result[0].device_type()
+        );
+
+        let resp = service
+            .list(list(Some(api::DeviceType::LorawanDevice)))
+            .await
+            .unwrap();
+        assert_eq!(1, resp.get_ref().total_count);
+        assert_eq!("0807060504030201", resp.get_ref().result[0].dev_eui);
     }
 
     fn get_request<T>(user_id: &Uuid, req: T) -> Request<T> {

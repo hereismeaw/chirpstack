@@ -23,6 +23,7 @@ import DeviceDashboard from "./DeviceDashboard";
 import EditDevice from "./EditDevice";
 import { DeviceType } from "@chirpstack/chirpstack-api-grpc-web/api/device_pb";
 import MiotyDeviceDashboard from "./MiotyDeviceDashboard";
+import ProtocolTag from "../../components/ProtocolTag";
 
 import SetDeviceKeys from "./SetDeviceKeys";
 import DeviceFrames from "./DeviceFrames";
@@ -97,6 +98,7 @@ function DeviceLayout(props: IProps) {
 
   const tenant = props.tenant;
   const app = props.application;
+  const isMioty = device.getDeviceType() === DeviceType.MIOTY_DEVICE;
 
   const path = location.pathname;
   let tab = "dashboard";
@@ -146,12 +148,17 @@ function DeviceLayout(props: IProps) {
           />
         )}
         title={device.getName()}
-        subTitle={`device eui: ${device.getDevEui()}`}
+        subTitle={
+          <Space>
+            <ProtocolTag protocol={isMioty ? "mioty" : "lorawan"} />
+            {`${isMioty ? "end point eui" : "device eui"}: ${device.getDevEui()}`}
+          </Space>
+        }
         extra={[
           <Admin tenantId={props.tenant.getId()} isDeviceAdmin key="delete-device">
             <DeleteConfirm typ="device" confirm={device.getName()} onConfirm={deleteDevice}>
               <Button danger type="primary">
-                Delete device
+                {isMioty ? "Delete End Point" : "Delete device"}
               </Button>
             </DeleteConfirm>
           </Admin>,
@@ -202,7 +209,7 @@ function DeviceLayout(props: IProps) {
               key: "queue",
               label: (
                 <Link to={`/tenants/${tenant.getId()}/applications/${app.getId()}/devices/${device.getDevEui()}/queue`}>
-                  Queue
+                  {isMioty ? "Downlink" : "Queue"}
                 </Link>
               ),
             },
@@ -229,7 +236,7 @@ function DeviceLayout(props: IProps) {
           ].filter(item => device.getDeviceType() !== DeviceType.MIOTY_DEVICE || !["keys", "activation", "frames"].includes(item.key))}
         />
         <Routes>
-          <Route path="/" element={device.getDeviceType() === DeviceType.MIOTY_DEVICE ? <MiotyDeviceDashboard device={device} lastSeenAt={lastSeenAt} /> : <DeviceDashboard device={device} lastSeenAt={lastSeenAt} deviceProfile={dp} />} />
+          <Route path="/" element={device.getDeviceType() === DeviceType.MIOTY_DEVICE ? <MiotyDeviceDashboard device={device} deviceProfile={dp} tenantId={tenant.getId()} lastSeenAt={lastSeenAt} /> : <DeviceDashboard device={device} lastSeenAt={lastSeenAt} deviceProfile={dp} />} />
           <Route path="/edit" element={<EditDevice device={device} application={app} tenant={tenant} />} />
           <Route
             path="/keys"

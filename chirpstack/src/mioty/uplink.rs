@@ -103,7 +103,7 @@ pub async fn receive(
         counter,
         &payload,
     )?;
-    let format = u8::try_from(value.get("format").and_then(Value::as_u64).unwrap_or(0))?;
+    let format = payload_format(value)?;
     let rssi = value
         .get("rssi")
         .and_then(Value::as_f64)
@@ -116,6 +116,12 @@ pub async fn receive(
         ("protocol".into(), "mioty".into()),
         ("format".into(), format.to_string()),
     ]);
+    if let Some(policy) = crate::storage::mioty_rf::get(gw.gateway_id).await? {
+        super::rf::validate(&policy)?;
+        metadata.insert("regional_profile".into(), policy.profile_id);
+        metadata.insert("regional_profile_source".into(), "desired_policy".into());
+        metadata.insert("regional_tx_enabled".into(), "false".into());
+    }
     for field in ["profile", "mode", "eqSnr", "rxDuration"] {
         if let Some(v) = value.get(field) {
             metadata.insert(
@@ -175,8 +181,11 @@ pub async fn receive(
         deduplication_id: id.to_string(),
         time: Some(time.into()),
         device_info: Some(info),
-        f_cnt: counter,
-        f_port: 0,
+        mioty: Some(events::MiotyUplinkInfo {
+            packet_counter: counter,
+            application_format: format.into(),
+            raw_user_data: payload,
+        }),
         data,
         object,
         rx_info: vec![rx],
@@ -224,4 +233,33 @@ pub async fn receive(
         tracing::warn!(error=%err,"MIOTY metrics update failed");
     }
     Ok(Some((ep, counter, dl_open)))
+}
+
+fn payload_format(value: &Value) -> Result<u8> {
+    match value.get("format") {
+        None => Ok(0),
+        Some(_) => Ok(u8::try_from(wire::uint(value, "format")?)?),
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn optional_format_defaults_only_when_absent() {
+        assert_eq!(payload_format(&json!({})).unwrap(), 0);
+        assert_eq!(payload_format(&json!({"format":255})).unwrap(), 255);
+        for value in [
+            json!(null),
+            json!("1"),
+            json!(-1),
+            json!(256),
+            json!(true),
+            json!(1.5),
+        ] {
+            assert!(payload_format(&json!({"format":value})).is_err());
+        }
+    }
 }

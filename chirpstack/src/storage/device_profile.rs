@@ -107,6 +107,8 @@ pub struct DeviceProfile {
     pub firmware_version: String,
     pub vendor_profile_id: i32,
     pub supported_uplink_data_rates: fields::DataRates,
+    /// 0 = LoRaWAN, 1 = mioty (api::ProfileProtocol).
+    pub protocol: i16,
 }
 
 impl DeviceProfile {
@@ -117,6 +119,10 @@ impl DeviceProfile {
 
         if self.rx1_delay < 0 || self.rx1_delay > 15 {
             return Err(Error::Validation("RX1 Delay must be between 0 - 15".into()));
+        }
+
+        if ![0, 1].contains(&self.protocol) {
+            return Err(Error::Validation("invalid protocol".into()));
         }
 
         Ok(())
@@ -161,6 +167,7 @@ impl Default for DeviceProfile {
             firmware_version: "".into(),
             vendor_profile_id: 0,
             supported_uplink_data_rates: fields::DataRates::default(),
+            protocol: 0,
         }
     }
 }
@@ -219,6 +226,7 @@ pub struct DeviceProfileListItem {
     pub device_id: Option<fields::Uuid>,
     pub device_name: Option<String>,
     pub firmware_version: String,
+    pub protocol: i16,
 }
 
 #[derive(Default, Clone)]
@@ -347,6 +355,7 @@ pub async fn update(dp: DeviceProfile) -> Result<DeviceProfile, Error> {
             device_profile::firmware_version.eq(&dp.firmware_version),
             device_profile::vendor_profile_id.eq(&dp.vendor_profile_id),
             device_profile::supported_uplink_data_rates.eq(&dp.supported_uplink_data_rates),
+            device_profile::protocol.eq(&dp.protocol),
         ))
         .get_result(&mut get_async_db_conn().await?)
         .await
@@ -471,6 +480,7 @@ pub async fn list(
             device_profile_device::id.nullable(),
             device_profile_device::name.nullable(),
             device_profile::firmware_version,
+            device_profile::protocol,
         ))
         .into_boxed();
 

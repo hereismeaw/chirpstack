@@ -354,6 +354,9 @@ message ListDevicesRequest {
 
   // Device-profile ID (UUID) to filter devices on.
   string device_profile_id = 9;
+
+  // Device type to filter devices on (optional).
+  optional DeviceType device_type = 10;
 }
 
 message ListDevicesResponse {

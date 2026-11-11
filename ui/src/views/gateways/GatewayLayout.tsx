@@ -13,6 +13,8 @@ import DeleteConfirm from "../../components/DeleteConfirm";
 
 import GatewayDashboard from "./GatewayDashboard";
 import MiotyGatewayDashboard from "./MiotyGatewayDashboard";
+import MiotyRfPolicy from "./MiotyRfPolicy";
+import ProtocolTag from "../../components/ProtocolTag";
 import EditGateway from "./EditGateway";
 import GatewayFrames from "./GatewayFrames";
 import GatewayCertificate from "./GatewayCertificate";
@@ -76,6 +78,9 @@ function GatewayLayout(props: IProps) {
   if (path.endsWith("/frames")) {
     tab = "frames";
   }
+  if (path.endsWith("/rf")) {
+    tab = "rf";
+  }
 
   const isGatewayAdmin =
     SessionStore.isAdmin() ||
@@ -90,18 +95,23 @@ function GatewayLayout(props: IProps) {
             items={[
               { title: "Tenants" },
               { title: <Link to={`/tenants/${props.tenant.getId()}`}>{props.tenant.getName()}</Link> },
-              { title: <Link to={`/tenants/${props.tenant.getId()}/gateways`}>Gateways</Link> },
+              { title: <Link to={`/tenants/${props.tenant.getId()}/gateways`}>Gateways / Base Stations</Link> },
               { title: gw.getName() },
             ]}
           />
         )}
         title={gw.getName()}
-        subTitle={`${isMioty ? "Mioty" : "LoRaWAN"} gateway id: ${gw.getGatewayId()}`}
+        subTitle={
+          <Space>
+            <ProtocolTag protocol={isMioty ? "mioty" : "lorawan"} />
+            {`${isMioty ? "base station eui" : "gateway id"}: ${gw.getGatewayId()}`}
+          </Space>
+        }
         extra={[
           <Admin tenantId={props.tenant.getId()} isGatewayAdmin key="delete-gateway">
             <DeleteConfirm confirm={gw.getName()} typ="gateway" onConfirm={deleteGateway}>
               <Button danger type="primary">
-                Delete gateway
+                {isMioty ? "Delete Base Station" : "Delete gateway"}
               </Button>
             </DeleteConfirm>
           </Admin>,
@@ -129,16 +139,21 @@ function GatewayLayout(props: IProps) {
               ),
             },
             {
+              key: "rf",
+              label: <Link to={`/tenants/${tenant.getId()}/gateways/${gw.getGatewayId()}/rf`}>RF policy</Link>,
+            },
+            {
               key: "frames",
               label: <Link to={`/tenants/${tenant.getId()}/gateways/${gw.getGatewayId()}/frames`}>LoRaWAN frames</Link>,
             },
-          ].filter(item => !isMioty || item.key !== "frames")}
+          ].filter(item => (isMioty ? item.key !== "frames" : item.key !== "rf"))}
         />
         <Routes>
           <Route path="/" element={isMioty ? <MiotyGatewayDashboard gateway={gw} lastSeenAt={lastSeenAt} /> : <GatewayDashboard gateway={gw} lastSeenAt={lastSeenAt} />} />
           <Route path="/edit" element={<EditGateway gateway={gw} />} />
           <Route path="/certificate" element={<GatewayCertificate gateway={gw} />} />
           {!isMioty && <Route path="/frames" element={<GatewayFrames gateway={gw} />} />}
+          {isMioty && <Route path="/rf" element={<MiotyRfPolicy gateway={gw} />} />}
         </Routes>
       </Card>
     </Space>

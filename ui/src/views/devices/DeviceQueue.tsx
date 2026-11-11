@@ -4,7 +4,7 @@ import { Struct } from "google-protobuf/google/protobuf/struct_pb";
 import { format } from "date-fns";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
 
-import { Switch, notification } from "antd";
+import { Alert, Switch, notification } from "antd";
 import type { DatePickerProps } from "antd";
 import { Button, Tabs, Space, Card, Row, Form, Input, InputNumber, Popconfirm, DatePicker } from "antd";
 import type { TabsProps } from "antd/lib";
@@ -44,6 +44,10 @@ interface FormRules {
 
 function DeviceQueue(props: IProps) {
   const isMioty = props.device.getDeviceType() === DeviceType.MIOTY_DEVICE;
+  // Capability of the End Point class as stored by the server (Device.mioty.ep_class).
+  const miotyClass = props.device.getMioty()?.getEpClass();
+  const miotyDownlinkSupported = isMioty && miotyClass === "A";
+  const canEnqueue = !isMioty || miotyDownlinkSupported;
   const [refreshCounter, setRefreshCounter] = useState<number>(0);
   const [isEncrypted, setIsEncrypted] = useState<boolean>(false);
   const [form] = Form.useForm<FormRules>();
@@ -220,7 +224,19 @@ function DeviceQueue(props: IProps) {
       key: "1",
       label: "HEX",
       children: (
-        <Form.Item name="hex">
+        <Form.Item
+          name="hex"
+          rules={
+            isMioty
+              ? [
+                  {
+                    pattern: /^(?:[0-9a-fA-F]{2})*$/,
+                    message: "Enter an even number of hexadecimal characters.",
+                  },
+                ]
+              : undefined
+          }
+        >
           <Input />
         </Form.Item>
       ),
@@ -243,6 +259,39 @@ function DeviceQueue(props: IProps) {
 
   return (
     <Space orientation="vertical" style={{ width: "100%" }} size="large">
+      {isMioty && !miotyDownlinkSupported && (
+        <Alert
+          type="info"
+          showIcon
+          title="Downlink is not available for this End Point"
+          description={`This End Point is configured as class ${miotyClass ?? "unknown"}. Only bidirectional class A End Points can receive downlinks; the server rejects downlinks for other classes.`}
+        />
+      )}
+      {miotyDownlinkSupported && (
+        <Alert
+          type="info"
+          showIcon
+          title="mioty downlink"
+          description={
+            <ul style={{ margin: 0, paddingInlineStart: 20 }}>
+              <li>
+                A queued payload is sent in the receive window that follows an uplink of the End Point. There is no
+                FPort, confirmation flag or expiry time.
+              </li>
+              <li>
+                A transmission result (txack event under Events) reports that a Base Station sent the payload. It is
+                not an acknowledgement from the End Point.
+              </li>
+              <li>
+                Base Stations with a selected TH920_925 RF policy do not transmit. If no other Base Station of the
+                tenant can serve the End Point, the payload stays queued.
+              </li>
+              <li>The queue cannot be flushed while a transmission is pending.</li>
+            </ul>
+          }
+        />
+      )}
+      {canEnqueue && (
       <Card title="Enqueue">
         <Form
           layout="horizontal"
@@ -285,13 +334,13 @@ function DeviceQueue(props: IProps) {
               </Form.Item>
             </Space>
           </Row>}
-          {isMioty && <p>Downlinks are delivered through a Mioty receive window. The endpoint must support bidirectional communication.</p>}
           <Tabs defaultActiveKey="1" items={tabItems} />
           <Button type="primary" htmlType="submit">
             Enqueue
           </Button>
         </Form>
       </Card>
+      )}
       <Row justify="end">
         <Space orientation="horizontal" size="large">
           <Button icon={<RedoOutlined />} onClick={refreshQueue}>

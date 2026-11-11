@@ -218,5 +218,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ],
         )?;
 
+    // Generate JSON only for the persisted mioty RF policy, following the same
+    // protobuf-JSON conventions as the integration and gateway event models.
+    #[cfg(feature = "json")]
+    {
+        let descriptor_set = std::fs::read(out_dir.join("api").join("proto_descriptor.bin"))?;
+        pbjson_build::Builder::new()
+            .register_descriptors(&descriptor_set)?
+            .ignore_unknown_fields()
+            .out_dir(out_dir.join("api"))
+            .build(&[".api.MiotyRfConfig", ".api.MiotyRfChannel"])?;
+    }
+
     Ok(())
 }

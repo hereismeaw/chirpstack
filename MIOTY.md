@@ -1,5 +1,13 @@
 # Native Mioty development
 
+Current extension documentation: [audit](docs/mioty/BASELINE_AUDIT.md),
+[API and event contract](docs/mioty/API_CONTRACT.md),
+[Thailand RF limitations](docs/mioty/HARDWARE_AND_REGULATORY.md), and
+[continuation handoff](docs/mioty/AI_HANDOFF.md). New mioty events have typed
+packet-counter fields. The experimental `TH920_925` policy blocks server-requested
+RF transmission. Historical validation and limitations below describe earlier
+development rounds; consult the new handoff for the current source and test record.
+
 Mioty runs inside ChirpStack and uses the existing tenants, users, gateways,
 applications, device profiles, queues and integrations. No external service center
 or separate account system is required. The listener is disabled by default.

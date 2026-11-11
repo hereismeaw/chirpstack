@@ -15,6 +15,16 @@ option java_package = "io.chirpstack.api";
 option php_metadata_namespace = "GPBMetadata\\Chirpstack\\Api";
 option php_namespace = "Chirpstack\\Api";
 
+// Technology a device-profile is intended for.
+enum ProfileProtocol {
+  // LoRaWAN device-profile (default, existing behavior).
+  PROFILE_LORAWAN = 0;
+
+  // mioty device-profile. It supplies payload codecs, measurements and tags
+  // for mioty endpoints; the LoRaWAN MAC settings are not applicable.
+  PROFILE_MIOTY = 1;
+}
+
 enum CodecRuntime {
   // None.
   NONE = 0;
@@ -210,6 +220,10 @@ message DeviceProfile {
   // Device-profile ID (UUID).
   // Note: on create this will be automatically generated.
   string id = 1;
+
+  // Technology of this device-profile. A mioty device-profile cannot be
+  // assigned to a LoRaWAN device.
+  ProfileProtocol protocol = 100;
 
   // Tenant ID (UUID).
   string tenant_id = 2;
@@ -545,6 +559,9 @@ message AppLayerParams {
 message DeviceProfileListItem {
   // Device-profile ID (UUID).
   string id = 1;
+
+  // Technology of this device-profile.
+  ProfileProtocol protocol = 100;
 
   // Created at timestamp.
   google.protobuf.Timestamp created_at = 2;

@@ -115,6 +115,7 @@ diesel::table! {
         firmware_version -> Text,
         vendor_profile_id -> Integer,
         supported_uplink_data_rates -> Text,
+        protocol -> SmallInt,
     }
 }
 
@@ -452,6 +453,7 @@ diesel::joinable!(tenant_user_device_profile -> device_profile (device_profile_i
 diesel::joinable!(tenant_user_device_profile -> user (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    mioty_gateway_rf,
     mioty_device,
     mioty_gateway_session,
     mioty_downlink,
@@ -535,3 +537,11 @@ diesel::table! {
         revision -> BigInt,
     }
 }
+
+diesel::table! {
+    mioty_gateway_rf (gateway_id) {
+        gateway_id -> Binary,
+        config_json -> Text,
+    }
+}
+diesel::joinable!(mioty_gateway_rf -> gateway (gateway_id));

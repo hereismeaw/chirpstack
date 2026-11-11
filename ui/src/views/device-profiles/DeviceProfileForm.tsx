@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-import { Form, Input, Select, InputNumber, Switch, Row, Col, Button, Tabs, Card } from "antd";
+import { Form, Input, Select, InputNumber, Switch, Row, Col, Button, Tabs, Card, Alert } from "antd";
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import type { TabsProps, SelectProps } from "antd/lib";
 
@@ -16,6 +16,7 @@ import {
   Ts003Version,
   Ts004Version,
   Ts005Version,
+  ProfileProtocol,
 } from "@chirpstack/chirpstack-api-grpc-web/api/device_profile_pb";
 import { Region, MacVersion, RegParamsRevision } from "@chirpstack/chirpstack-api-grpc-web/common/common_pb";
 import type { ListRegionsResponse, RegionListItem } from "@chirpstack/chirpstack-api-grpc-web/api/internal_pb";
@@ -51,8 +52,13 @@ const dataRates: SelectProps["options"] = [
   { label: "DR15", value: 15 },
 ];
 
+// Tabs that only describe LoRaWAN MAC behaviour and are hidden for mioty.
+const LORAWAN_ONLY_TABS = ["2", "3", "4", "6", "7"];
+
 function DeviceProfileForm(props: IProps) {
   const [form] = Form.useForm();
+  const protocol: ProfileProtocol = Form.useWatch("protocol", form) ?? props.initialValues.getProtocol();
+  const isMioty = protocol === ProfileProtocol.PROFILE_MIOTY;
 
   const [supportsOtaa, setSupportsOtaa] = useState<boolean>(false);
   const [supportsClassB, setSupportsClassB] = useState<boolean>(false);
@@ -107,6 +113,7 @@ function DeviceProfileForm(props: IProps) {
     const dp = new DeviceProfile();
     dp.setId(v.id);
     dp.setTenantId(v.tenantId);
+    dp.setProtocol(v.protocol);
 
     dp.setName(v.name);
     dp.setDescription(v.description);
@@ -198,6 +205,18 @@ function DeviceProfileForm(props: IProps) {
     }
     dp.setAppLayerParams(appLayer);
 
+    if (v.protocol === ProfileProtocol.PROFILE_MIOTY) {
+      // LoRaWAN capability flags have no meaning for a mioty profile. The
+      // remaining LoRaWAN MAC fields keep their stored values and are unused.
+      dp.setSupportsOtaa(false);
+      dp.setSupportsClassB(false);
+      dp.setSupportsClassC(false);
+      dp.setIsRelay(false);
+      dp.setIsRelayEd(false);
+      dp.setAllowRoaming(false);
+      dp.setDeviceStatusReqInterval(0);
+    }
+
     props.onFinish(dp);
   };
 
@@ -267,12 +286,46 @@ function DeviceProfileForm(props: IProps) {
       label: "General",
       children: (
         <>
+          <Form.Item
+            label="Technology"
+            name="protocol"
+            tooltip="The radio technology of the devices that use this profile. A mioty device profile cannot be assigned to LoRaWAN devices."
+            rules={[{ required: true, message: "Please select a technology!" }]}
+          >
+            <Select
+              aria-label="Technology"
+              disabled={props.disabled}
+              options={[
+                { value: ProfileProtocol.PROFILE_LORAWAN, label: "LoRaWAN" },
+                { value: ProfileProtocol.PROFILE_MIOTY, label: "mioty" },
+              ]}
+            />
+          </Form.Item>
+          {isMioty && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 24 }}
+              title="mioty device profile"
+              description={
+                <>
+                  A mioty device profile supplies the payload codec, measurements and tags of the End Points that use
+                  it. The End Point class, application cryptography and radio options are configured on each End
+                  Point. The regional radio policy is configured on each Base Station (RF policy). LoRaWAN MAC, ADR,
+                  activation and class settings do not apply and are not shown. Application Layer Blueprints are not
+                  supported by this server; use a payload codec.
+                </>
+              }
+            />
+          )}
           <Form.Item label="Name" name="name" rules={[{ required: true, message: "Please enter a name!" }]}>
             <Input disabled={props.disabled} />
           </Form.Item>
           <Form.Item label="Description" name="description">
             <Input.TextArea rows={6} disabled={props.disabled} />
           </Form.Item>
+          {!isMioty && (
+            <>
           <Row gutter={24}>
             <Col span={12}>
               <Form.Item label="Region" name="region" rules={[{ required: true, message: "Please select a region!" }]}>
@@ -368,6 +421,8 @@ function DeviceProfileForm(props: IProps) {
               </Form.Item>
             </Col>
           </Row>
+            </>
+          )}
           <Row>
             <Col span={12}>
               <Form.Item
@@ -384,6 +439,7 @@ function DeviceProfileForm(props: IProps) {
                 <InputNumber min={0} disabled={props.disabled} />
               </Form.Item>
             </Col>
+            {!isMioty && (
             <Col span={12}>
               <Form.Item
                 label="Device-status request frequency (req/day)"
@@ -393,7 +449,9 @@ function DeviceProfileForm(props: IProps) {
                 <InputNumber min={0} disabled={props.disabled} />
               </Form.Item>
             </Col>
+            )}
           </Row>
+          {!isMioty && (
           <Row>
             <Col span={12}>
               <Form.Item
@@ -414,6 +472,7 @@ function DeviceProfileForm(props: IProps) {
               </Form.Item>
             </Col>
           </Row>
+          )}
         </>
       ),
     },
@@ -622,6 +681,15 @@ function DeviceProfileForm(props: IProps) {
       label: "Payload codec",
       children: (
         <>
+          {isMioty && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 24 }}
+              title="Payload codec for mioty End Points"
+              description="The codec receives the application payload after decryption. Its port argument (fPort) carries the mioty application payload format reported with the uplink, not a LoRaWAN FPort."
+            />
+          )}
           <Form.Item
             label="Payload codec"
             name="payloadCodecRuntime"
@@ -1207,7 +1275,11 @@ function DeviceProfileForm(props: IProps) {
       onFinishFailed={onFinishFailed}
       form={form}
     >
-      <Tabs activeKey={tabActive} onChange={onTabChange} items={tabItems} />
+      <Tabs
+        activeKey={isMioty && LORAWAN_ONLY_TABS.includes(tabActive) ? "1" : tabActive}
+        onChange={onTabChange}
+        items={isMioty ? tabItems.filter(t => !LORAWAN_ONLY_TABS.includes(t.key)) : tabItems}
+      />
       <Form.Item>
         <Button type="primary" htmlType="submit" disabled={props.disabled}>
           Submit

@@ -173,6 +173,9 @@ message UplinkEvent {
   // Region config ID.
   // This contains the region config ID which reported the uplink.
   string region_config_id = 16;
+
+  // Present only for native mioty uplinks. LoRaWAN fields are not mioty MAC state.
+  MiotyUplinkInfo mioty = 17;
 }
 
 // JoinEvent is the message sent when a device joined the network.
@@ -250,6 +253,9 @@ message TxAckEvent {
 
   // TX info.
   gw.DownlinkTxInfo tx_info = 7;
+
+  // Present only for native mioty transmission results (not endpoint ACKs).
+  MiotyTxInfo mioty = 8;
 }
 
 // LogEvent is the message sent when a device-related log was sent.
@@ -341,4 +347,16 @@ message DownlinkCommand {
   // Expires at (optional).
   // Expired queue-items will be automatically removed from the queue.
   google.protobuf.Timestamp expires_at = 7;
+}
+
+// Native mioty application-layer information; presence identifies the protocol.
+message MiotyUplinkInfo {
+  uint32 packet_counter = 1;
+  uint32 application_format = 2;
+  // BSSCI userData before application decryption, distinct from UplinkEvent.data.
+  bytes raw_user_data = 3;
+}
+
+message MiotyTxInfo {
+  uint32 packet_counter = 1;
 }

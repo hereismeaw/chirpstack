@@ -230,6 +230,7 @@ pub struct Filters {
     pub device_profile_id: Option<Uuid>,
     pub search: Option<String>,
     pub tags: HashMap<String, String>,
+    pub device_type: Option<i16>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -665,6 +666,10 @@ pub async fn get_count(filters: &Filters) -> Result<i64, Error> {
         .left_join(multicast_group_device::table)
         .into_boxed();
 
+    if let Some(device_type) = filters.device_type {
+        q = q.filter(device::device_type.eq(device_type));
+    }
+
     // Filter by user permissions
     if let Some(user_id) = &filters.user_id {
         q = q.filter(dsl::exists(
@@ -773,6 +778,10 @@ pub async fn list(
         ))
         .distinct()
         .into_boxed();
+
+    if let Some(device_type) = filters.device_type {
+        q = q.filter(device::device_type.eq(device_type));
+    }
 
     // Filter by user permissions
     if let Some(user_id) = &filters.user_id {

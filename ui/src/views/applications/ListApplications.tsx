@@ -16,6 +16,8 @@ import ApplicationStore from "../../stores/ApplicationStore";
 import Admin from "../../components/Admin";
 import PageHeader from "../../components/PageHeader";
 import { useTitle } from "../helpers";
+import { DeviceType } from "@chirpstack/chirpstack-api-grpc-web/api/device_pb";
+import { DeviceCount, LastUplink } from "../../components/DeviceCount";
 
 interface IProps {
   tenant: Tenant;
@@ -35,6 +37,26 @@ function ListApplications(props: IProps) {
       title: "Description",
       dataIndex: "description",
       key: "description",
+    },
+    {
+      title: "LoRaWAN devices",
+      key: "lorawanDevices",
+      width: 160,
+      align: "right",
+      render: (_text, record) => <DeviceCount applicationId={record.id} deviceType={DeviceType.LORAWAN_DEVICE} />,
+    },
+    {
+      title: "mioty End Points",
+      key: "miotyDevices",
+      width: 160,
+      align: "right",
+      render: (_text, record) => <DeviceCount applicationId={record.id} deviceType={DeviceType.MIOTY_DEVICE} />,
+    },
+    {
+      title: "Last uplink",
+      key: "lastUplink",
+      width: 190,
+      render: (_text, record) => <LastUplink applicationId={record.id} />,
     },
   ];
 

@@ -112,7 +112,9 @@ pub async fn downlink_result(
                 time: Some(tx_time.context("transmission time missing")?.into()),
                 device_info: Some(info),
                 queue_item_id: dl.queue_item_id.to_string(),
-                f_cnt_down: u32::try_from(dl.packet_counter)?,
+                mioty: Some(events::MiotyTxInfo {
+                    packet_counter: u32::try_from(dl.packet_counter)?,
+                }),
                 gateway_id: gw.gateway_id.to_string(),
                 ..Default::default()
             }

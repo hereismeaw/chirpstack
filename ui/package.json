@@ -9,6 +9,8 @@
     "lint": "eslint . --max-warnings 0",
     "preview": "vite preview",
     "type-check": "tsc -b --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "format": "prettier --write .",
     "format-check": "prettier --check ."
   },
@@ -47,6 +49,8 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.9",
     "@types/events": "^3.0.3",
     "@types/google-protobuf": "^3.15.12",
     "@types/leaflet": "^1.9.22",
@@ -57,9 +61,11 @@
     "eslint": "^10.13.0",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^31.0.0",
     "prettier": "^3.9.10",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.72.1",
-    "vite": "^8.3.5"
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
   }
 }

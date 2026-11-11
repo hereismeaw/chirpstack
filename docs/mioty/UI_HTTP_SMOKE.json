@@ -1,0 +1,17 @@
+[
+    {
+        "path":  "/",
+        "status":  200,
+        "bytes":  531
+    },
+    {
+        "path":  "/assets/index-BEA1swuM.js",
+        "status":  200,
+        "bytes":  4408011
+    },
+    {
+        "path":  "/assets/index-CM3pkHP0.css",
+        "status":  200,
+        "bytes":  111169
+    }
+]

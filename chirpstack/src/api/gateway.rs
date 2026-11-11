@@ -31,6 +31,75 @@ impl Gateway {
 
 #[tonic::async_trait]
 impl GatewayService for Gateway {
+    async fn get_mioty_rf_config(
+        &self,
+        request: Request<api::GetMiotyRfConfigRequest>,
+    ) -> Result<Response<api::GetMiotyRfConfigResponse>, Status> {
+        let eui = EUI64::from_str(&request.get_ref().gateway_id).map_err(|_| {
+            Status::invalid_argument("gateway_id must contain 16 hexadecimal digits")
+        })?;
+        self.validator
+            .validate(
+                request.extensions(),
+                validator::ValidateGatewayAccess::new(validator::Flag::Read, eui),
+            )
+            .await?;
+        let gw = gateway::get(&eui).await.map_err(|e| e.status())?;
+        if gw.gateway_type != 1 {
+            return Err(Status::invalid_argument(
+                "RF policy requires a mioty gateway",
+            ));
+        }
+        let config = crate::storage::mioty_rf::get(eui)
+            .await
+            .map_err(|e| e.status())?;
+        Ok(Response::new(api::GetMiotyRfConfigResponse {
+            config,
+            display_name: crate::mioty::rf::DISPLAY_NAME.into(),
+            min_frequency_hz: crate::mioty::rf::MIN_HZ,
+            max_frequency_hz: crate::mioty::rf::MAX_HZ,
+            experimental: true,
+            tx_supported: false,
+            tx_blockers: crate::mioty::rf::tx_blockers(),
+            reported_bidirectional: gw
+                .properties
+                .into_hashmap()
+                .get("mioty_bidi")
+                .and_then(|s| s.parse().ok()),
+        }))
+    }
+
+    async fn update_mioty_rf_config(
+        &self,
+        request: Request<api::UpdateMiotyRfConfigRequest>,
+    ) -> Result<Response<()>, Status> {
+        let req = request.get_ref();
+        let eui = EUI64::from_str(&req.gateway_id).map_err(|_| {
+            Status::invalid_argument("gateway_id must contain 16 hexadecimal digits")
+        })?;
+        self.validator
+            .validate(
+                request.extensions(),
+                validator::ValidateGatewayAccess::new(validator::Flag::Update, eui),
+            )
+            .await?;
+        let config = req
+            .config
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("config is missing"))?;
+        crate::mioty::rf::validate(config).map_err(|e| {
+            if config.tx_enabled {
+                Status::failed_precondition(e.to_string())
+            } else {
+                Status::invalid_argument(e.to_string())
+            }
+        })?;
+        crate::storage::mioty_rf::set(eui, config)
+            .await
+            .map_err(|e| e.status())?;
+        Ok(Response::new(()))
+    }
+
     async fn create(
         &self,
         request: Request<api::CreateGatewayRequest>,
@@ -265,6 +334,12 @@ impl GatewayService for Gateway {
             } else {
                 Some(req.search.to_string())
             },
+            gateway_type: req
+                .gateway_type
+                .map(api::GatewayType::try_from)
+                .transpose()
+                .map_err(|_| Status::invalid_argument("invalid gateway_type"))?
+                .map(|v| v as i16),
         };
 
         let count = gateway::get_count(&filters).await.map_err(|e| e.status())?;
@@ -1022,6 +1097,180 @@ pub mod test {
     use crate::storage::metrics;
     use crate::storage::{tenant, user};
     use crate::test;
+
+    #[tokio::test]
+    async fn list_filters_by_gateway_type() {
+        let _guard = test::prepare().await;
+        let (_, _, mioty_gw) = crate::storage::mioty::tests::fixture().await;
+        let admin = user::create(user::User {
+            email: "admin@admin".into(),
+            is_admin: true,
+            is_active: true,
+            email_verified: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        gateway::create(gateway::Gateway {
+            gateway_id: EUI64::from_be_bytes([3; 8]),
+            tenant_id: mioty_gw.tenant_id,
+            name: "lorawan gateway".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let service = Gateway::new(RequestValidator::new());
+        let list = |gateway_type: Option<api::GatewayType>| {
+            let mut request = Request::new(api::ListGatewaysRequest {
+                tenant_id: mioty_gw.tenant_id.to_string(),
+                limit: 10,
+                gateway_type: gateway_type.map(Into::into),
+                ..Default::default()
+            });
+            request
+                .extensions_mut()
+                .insert(AuthID::User(admin.id.into()));
+            request
+        };
+
+        let resp = service.list(list(None)).await.unwrap();
+        assert_eq!(2, resp.get_ref().total_count);
+
+        let resp = service
+            .list(list(Some(api::GatewayType::Mioty)))
+            .await
+            .unwrap();
+        assert_eq!(1, resp.get_ref().total_count);
+        assert_eq!(
+            mioty_gw.gateway_id.to_string(),
+            resp.get_ref().result[0].gateway_id
+        );
+
+        let resp = service
+            .list(list(Some(api::GatewayType::Lorawan)))
+            .await
+            .unwrap();
+        assert_eq!(1, resp.get_ref().total_count);
+        assert_eq!("0303030303030303", resp.get_ref().result[0].gateway_id);
+    }
+
+    #[tokio::test]
+    async fn mioty_rf_api_enforces_tenant_access_and_preserves_policy_on_error() {
+        let _guard = test::prepare().await;
+        let (_, _, gw) = crate::storage::mioty::tests::fixture().await;
+        let owner = user::create(user::User {
+            email: "rf-owner@example.com".into(),
+            is_active: true,
+            email_verified: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        tenant::add_user(
+            tenant::TenantUser {
+                tenant_id: gw.tenant_id,
+                user_id: owner.id,
+                is_gateway_admin: true,
+                ..Default::default()
+            },
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+        let outsider = user::create(user::User {
+            email: "rf-other@example.com".into(),
+            is_active: true,
+            email_verified: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let other_tenant = tenant::create(tenant::Tenant {
+            name: "other tenant".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        tenant::add_user(
+            tenant::TenantUser {
+                tenant_id: other_tenant.id,
+                user_id: outsider.id,
+                is_admin: true,
+                ..Default::default()
+            },
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+        let service = Gateway::new(RequestValidator::new());
+        let read = || api::GetMiotyRfConfigRequest {
+            gateway_id: gw.gateway_id.to_string(),
+        };
+        let mut request = Request::new(read());
+        request
+            .extensions_mut()
+            .insert(AuthID::User(owner.id.into()));
+        let initial = service
+            .get_mioty_rf_config(request)
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(initial.config.is_none());
+        assert!(initial.reported_bidirectional.is_none());
+        assert!(!initial.tx_supported);
+        let policy = api::MiotyRfConfig {
+            profile_id: crate::mioty::rf::PROFILE_ID.into(),
+            ..Default::default()
+        };
+        let write = |config| api::UpdateMiotyRfConfigRequest {
+            gateway_id: gw.gateway_id.to_string(),
+            config: Some(config),
+        };
+        let mut request = Request::new(write(policy.clone()));
+        request
+            .extensions_mut()
+            .insert(AuthID::User(owner.id.into()));
+        service.update_mioty_rf_config(request).await.unwrap();
+        let mut invalid = policy.clone();
+        invalid.tx_enabled = true;
+        let mut request = Request::new(write(invalid));
+        request
+            .extensions_mut()
+            .insert(AuthID::User(owner.id.into()));
+        assert_eq!(
+            service
+                .update_mioty_rf_config(request)
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition
+        );
+        let mut request = Request::new(read());
+        request
+            .extensions_mut()
+            .insert(AuthID::User(outsider.id.into()));
+        assert!(service.get_mioty_rf_config(request).await.is_err());
+        let mut request = Request::new(write(policy.clone()));
+        request
+            .extensions_mut()
+            .insert(AuthID::User(outsider.id.into()));
+        assert!(service.update_mioty_rf_config(request).await.is_err());
+        let mut request = Request::new(read());
+        request
+            .extensions_mut()
+            .insert(AuthID::User(owner.id.into()));
+        assert_eq!(
+            service
+                .get_mioty_rf_config(request)
+                .await
+                .unwrap()
+                .into_inner()
+                .config,
+            Some(policy)
+        );
+    }
 
     #[tokio::test]
     async fn test_gateway() {

@@ -530,6 +530,7 @@ impl TxAck {
             f_cnt_down: qi.f_cnt_down.unwrap_or(0) as u32,
             gateway_id,
             tx_info: self.downlink_frame_item.as_ref().unwrap().tx_info.clone(),
+            mioty: None,
         };
 
         integration::txack_event(app.id.into(), &dev.variables, &pl).await;
@@ -579,6 +580,7 @@ impl TxAck {
             f_cnt_down: qi.f_cnt_down.unwrap_or(0) as u32,
             gateway_id,
             tx_info: self.downlink_frame_item.as_ref().unwrap().tx_info.clone(),
+            mioty: None,
         };
 
         integration::txack_event(app.id.into(), &dev.variables, &pl).await;

@@ -9,6 +9,8 @@ use lrwn::EUI64;
 
 mod crypto;
 mod events;
+pub(crate) mod metrics;
+pub mod rf;
 mod server;
 mod uplink;
 mod wire;

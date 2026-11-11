@@ -4,6 +4,7 @@ import { Cascader, Form } from "antd";
 
 import type { Tenant } from "@chirpstack/chirpstack-api-grpc-web/api/tenant_pb";
 import { Region } from "@chirpstack/chirpstack-api-grpc-web/common/common_pb";
+import type { DeviceProfileListItem } from "@chirpstack/chirpstack-api-grpc-web/api/device_profile_pb";
 import type {
   ListDeviceProfilesResponse,
   ListDeviceProfileVendorsResponse,
@@ -14,12 +15,14 @@ import type {
 import {
   ListDeviceProfilesRequest,
   ListDeviceProfileVendorsRequest,
+  ProfileProtocol,
   ListDeviceProfileDevicesRequest,
   GetDeviceProfileRequest,
   GetDeviceProfileDeviceRequest,
 } from "@chirpstack/chirpstack-api-grpc-web/api/device_profile_pb";
 import DeviceProfileStore from "../stores/DeviceProfileStore";
 import { getEnumName } from "../views/helpers";
+import type { Protocol } from "../lib/protocol";
 
 interface IProps {
   label: string;
@@ -29,6 +32,27 @@ interface IProps {
   value?: string;
   disabled?: boolean;
   tooltip?: string;
+  // Protocol of the device the profile is selected for. LoRaWAN devices are
+  // not offered mioty device profiles (the server rejects that assignment).
+  // mioty End Points are offered both: profiles created before profiles had a
+  // technology remain usable for their codec.
+  protocol?: Protocol;
+}
+
+function isMiotyProfile(p: DeviceProfileListItem): boolean {
+  return p.getProtocol() === ProfileProtocol.PROFILE_MIOTY;
+}
+
+/** Tenant profile options for the given device protocol. */
+export function tenantProfileOptions(profiles: DeviceProfileListItem[], protocol?: Protocol): CascaderOption[] {
+  return profiles
+    .filter(p => protocol !== "lorawan" || !isMiotyProfile(p))
+    .map(p => ({
+      type: "profile",
+      label: isMiotyProfile(p) ? `${p.getName()} (mioty)` : protocol === "mioty" ? `${p.getName()} (LoRaWAN)` : p.getName(),
+      value: p.getId(),
+      isLeaf: true,
+    }));
 }
 
 interface CascaderOption {
@@ -145,14 +169,7 @@ function DeviceProfileSelect(props: IProps) {
           req.setTenantOnly(true);
 
           DeviceProfileStore.list(req, (resp: ListDeviceProfilesResponse) => {
-            dpOptions[0].children = resp.getResultList().map(v => {
-              return {
-                type: "profile",
-                label: v.getName(),
-                value: v.getId(),
-                isLeaf: true,
-              };
-            });
+            dpOptions[0].children = tenantProfileOptions(resp.getResultList(), props.protocol);
 
             setDpOptions([...dpOptions]);
           });
@@ -161,7 +178,7 @@ function DeviceProfileSelect(props: IProps) {
         }
       });
     }
-  }, [props.name, props.value, props.tenant, form]);
+  }, [props.name, props.value, props.tenant, props.protocol, form]);
 
   const loadDeviceProfileData = (selectedOptions: CascaderOption[]) => {
     if (selectedOptions.length === 0) {
@@ -193,14 +210,7 @@ function DeviceProfileSelect(props: IProps) {
       req.setLimit(9999);
 
       DeviceProfileStore.list(req, (resp: ListDeviceProfilesResponse) => {
-        targetOption.children = resp.getResultList().map(v => {
-          return {
-            type: "profile",
-            label: v.getName(),
-            value: v.getId(),
-            isLeaf: true,
-          };
-        });
+        targetOption.children = tenantProfileOptions(resp.getResultList(), props.protocol);
 
         setDpOptions([...dpOptions]);
       });
@@ -259,7 +269,7 @@ function DeviceProfileSelect(props: IProps) {
       name={props.name}
       tooltip={props.tooltip}
     >
-      <Cascader options={dpOptions} loadData={loadDeviceProfileData} disabled={props.disabled} />
+      <Cascader aria-label={props.label} options={dpOptions} loadData={loadDeviceProfileData} disabled={props.disabled} />
     </Form.Item>
   );
 }

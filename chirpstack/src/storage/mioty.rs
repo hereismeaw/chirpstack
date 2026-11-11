@@ -47,6 +47,14 @@ pub async fn update(
 ) -> Result<super::device::Device, Error> {
     let mut conn = get_async_db_conn().await?;
     conn.transaction::<super::device::Device, Error, _>(async |conn| {
+        // Acquire SQLite's writer lock before reading a snapshot. Otherwise a
+        // concurrent session/outbox write can make the later read-to-write
+        // upgrade fail with SQLITE_BUSY_SNAPSHOT despite the busy timeout.
+        #[cfg(feature = "sqlite")]
+        diesel::update(mioty_device::table.find(ep.dev_eui))
+            .set(mioty_device::dev_eui.eq(ep.dev_eui))
+            .execute(conn)
+            .await?;
         let query = mioty_device::table.find(ep.dev_eui);
         #[cfg(feature = "postgres")]
         let query = query.for_update();
@@ -140,6 +148,11 @@ pub async fn reserve_downlink_with_lease(
     let mut conn = get_async_db_conn().await?;
     conn.transaction::<_, Error, _>(async |conn| {
         super::mioty_session::fence(conn, gateway_id, lease).await?;
+        if !super::mioty_rf::permits_tx_with_conn(conn, gateway_id).await? {
+            crate::mioty::metrics::tx_blocked();
+            tracing::debug!(%gateway_id, "MIOTY downlink reservation blocked by RF policy");
+            return Ok(None);
+        }
         // The conditional write serializes reservations on SQLite and PostgreSQL.
         let changed = diesel::update(
             mioty_device::table
@@ -199,10 +212,7 @@ pub async fn reserve_downlink_with_lease(
             .execute(conn)
             .await?;
         diesel::update(device_queue_item::table.find(qi.id))
-            .set((
-                device_queue_item::is_pending.eq(true),
-                device_queue_item::f_cnt_down.eq(Some(i64::from(counter))),
-            ))
+            .set(device_queue_item::is_pending.eq(true))
             .execute(conn)
             .await?;
         Ok(Some((dl, qi)))

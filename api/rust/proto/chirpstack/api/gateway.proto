@@ -17,6 +17,16 @@ option php_namespace = "Chirpstack\\Api";
 
 // GatewayService is the service providing API methods for managing gateways.
 service GatewayService {
+  // Desired mioty RF policy. Does not configure radio firmware.
+  rpc GetMiotyRfConfig(GetMiotyRfConfigRequest) returns (GetMiotyRfConfigResponse) {
+    option (google.api.http) = {get: "/api/gateways/{gateway_id}/mioty/rf"};
+  }
+
+  // Replace the desired policy. TH920_925 transmission is currently unsupported.
+  rpc UpdateMiotyRfConfig(UpdateMiotyRfConfigRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {put: "/api/gateways/{gateway_id}/mioty/rf" body: "*"};
+  }
+
   // Create creates the given gateway.
   rpc Create(CreateGatewayRequest) returns (google.protobuf.Empty) {
     option (google.api.http) = {
@@ -246,6 +256,9 @@ message ListGatewaysRequest {
 
   // If set, the sorting direction will be decending (default = ascending) (optional).
   bool order_by_desc = 7;
+
+  // Gateway type to filter gateways on (optional).
+  optional GatewayType gateway_type = 8;
 }
 
 message ListGatewaysResponse {
@@ -438,4 +451,42 @@ message RelayGateway {
 
   // Region configuration ID.
   string region_config_id = 6;
+}
+
+// Full occupied envelope of a channel, including all frequency excursions.
+// These are desired values, not a claimed mioty waveform or measured RF data.
+message MiotyRfChannel {
+  uint32 center_frequency_hz = 1;
+  uint32 occupied_bandwidth_hz = 2;
+}
+
+message MiotyRfConfig {
+  // Only TH920_925 is currently accepted. Empty channels means unconfigured.
+  string profile_id = 1;
+  bool tx_enabled = 2;
+  repeated MiotyRfChannel channels = 3;
+  // Milli-dBm, milli-dBi and milli-dB preserve exact integer power arithmetic.
+  optional int32 conducted_power_mdbm = 4;
+  optional int32 antenna_gain_mdbi = 5;
+  optional uint32 cable_loss_mdb = 6;
+  // Operator policy ceiling; not an NBTC approval or default legal limit.
+  optional int32 max_eirp_mdbm = 7;
+}
+
+message GetMiotyRfConfigRequest { string gateway_id = 1; }
+message UpdateMiotyRfConfigRequest {
+  string gateway_id = 1;
+  MiotyRfConfig config = 2;
+}
+message GetMiotyRfConfigResponse {
+  // Absent for existing gateways without an explicitly selected RF policy.
+  MiotyRfConfig config = 1;
+  string display_name = 2;
+  uint32 min_frequency_hz = 3;
+  uint32 max_frequency_hz = 4;
+  bool experimental = 5;
+  bool tx_supported = 6;
+  repeated string tx_blockers = 7;
+  // Only the authenticated BSSCI bidi declaration is known. No inferred ranges.
+  optional bool reported_bidirectional = 8;
 }

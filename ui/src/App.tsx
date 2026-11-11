@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { RouterProps } from "react-router";
 import { Router, Routes, Route } from "react-router";
 import { Layout } from "antd";
@@ -60,9 +60,13 @@ const CustomRouter = ({ history, ...props }: IProps) => {
 
 function App() {
   const [user, setUser] = useState<User | undefined>(SessionStore.getUser());
-  SessionStore.on("change", () => {
-    setUser(SessionStore.getUser());
-  });
+  useEffect(() => {
+    const onChange = () => setUser(SessionStore.getUser());
+    SessionStore.on("change", onChange);
+    return () => {
+      SessionStore.removeListener("change", onChange);
+    };
+  }, []);
 
   return (
     <Layout style={{ minHeight: "100vh" }}>

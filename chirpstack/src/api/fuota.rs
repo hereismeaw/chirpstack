@@ -735,6 +735,7 @@ mod test {
             dev_eui: EUI64::from_be_bytes([1, 2, 3, 4, 5, 6, 7, 8]),
             application_id: app.id,
             device_profile_id: dp.id,
+            name: "test-device".into(),
             ..Default::default()
         })
         .await

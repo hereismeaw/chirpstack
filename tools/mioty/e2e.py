@@ -142,7 +142,7 @@ class Broker:
         self.client.loop_stop()
 
 
-async def verify(binary, directory, report):
+async def verify(binary, directory, report, serve_ui=False):
     root = Path(__file__).resolve().parents[2]
     modules = generate_clients(root, directory)
     processes, logs = [], []
@@ -239,7 +239,11 @@ json=true
         application = await call("application", "Create", app_pb.CreateApplicationRequest(application=app_pb.Application(name="Mioty E2E", tenant_id=tenants[0])), auth[0])
         profile_pb, _ = modules["device_profile"]
         profile = await call("device_profile", "Create", profile_pb.CreateDeviceProfileRequest(device_profile=profile_pb.DeviceProfile(
-            name="Mioty E2E", tenant_id=tenants[0], supports_otaa=True, adr_algorithm_id="default", uplink_interval=60)), auth[0])
+            name="Mioty E2E", tenant_id=tenants[0], protocol=profile_pb.PROFILE_MIOTY, uplink_interval=60,
+            payload_codec_runtime=profile_pb.JS,
+            payload_codec_script="function decodeUplink(input) { return { data: { firstByte: input.bytes[0], applicationFormat: input.fPort } }; }")), auth[0])
+        stored_profile = await call("device_profile", "Get", profile_pb.GetDeviceProfileRequest(id=profile.id), auth[0])
+        assert stored_profile.device_profile.protocol == profile_pb.PROFILE_MIOTY
         gateway_pb, _ = modules["gateway"]
         device_pb, _ = modules["device"]
         gateway_eui, device_eui = secrets.token_hex(8), secrets.token_hex(8)
@@ -334,7 +338,38 @@ json=true
                 await peer.uplink(b"\x01\x02\x03")
                 event = await broker.event("up", device_eui)
                 assert base64.b64decode(event["data"]) == b"\x01\x02\x03"
-                checks.append("TLS uplink delivered through real MQTT")
+                assert event["mioty"]["packetCounter"] == peer.window
+                assert base64.b64decode(event["mioty"]["rawUserData"]) == b"\x01\x02\x03"
+                assert event.get("fCnt", 0) == 0
+                assert event["object"]["firstByte"] == 1 and event["object"]["applicationFormat"] == 0
+                checks.append("TLS uplink and JavaScript-decoded payload delivered through real MQTT")
+                # Verify the same stream used by the existing React Events page,
+                # independently of MQTT delivery and without a parallel event API.
+                stream = stubs["internal"].StreamDeviceEvents(
+                    internal_pb.StreamDeviceEventsRequest(dev_eui=device_eui), metadata=auth[0], timeout=10)
+                try:
+                    while True:
+                        item = await stream.read()
+                        assert item is not grpc.aio.EOF, "Live Events stream ended before the uplink"
+                        if item.description == "up":
+                            live = json.loads(item.body)
+                            assert base64.b64decode(live["data"]) == b"\x01\x02\x03"
+                            assert live["mioty"]["packetCounter"] == peer.window
+                            assert live["object"]["firstByte"] == 1
+                            break
+                finally:
+                    stream.cancel()
+                forbidden_stream = stubs["internal"].StreamDeviceEvents(
+                    internal_pb.StreamDeviceEventsRequest(dev_eui=device_eui), metadata=auth[1], timeout=10)
+                try:
+                    try:
+                        await forbidden_stream.read()
+                        raise AssertionError("Other tenant could read Live Events")
+                    except grpc.aio.AioRpcError as error:
+                        assert error.code() in (grpc.StatusCode.UNAUTHENTICATED, grpc.StatusCode.PERMISSION_DENIED, grpc.StatusCode.NOT_FOUND)
+                finally:
+                    forbidden_stream.cancel()
+                checks.append("Native uplink reaches the authorized Live Events stream; another tenant is rejected")
                 topic = f"application/{application.id}/device/{device_eui}/command/down"
                 await asyncio.to_thread(broker.publish, topic, {"devEui": device_eui, "fPort": 0, "confirmed": False, "data": base64.b64encode(b"\x09\x08\x07").decode()})
                 for _ in range(100):
@@ -347,8 +382,19 @@ json=true
                 await peer.uplink(b"\x04\x05\x06")
                 txack = await broker.event("txack", device_eui)
                 assert txack["queueItemId"] == queue_id and txack["gatewayId"] == gateway_eui
+                assert txack["mioty"]["packetCounter"] == peer.window
+                assert txack.get("fCntDown", 0) == 0
                 assert (await call("device", "GetQueue", device_pb.GetDeviceQueueItemsRequest(dev_eui=device_eui), auth[0])).total_count == 0
                 checks.append("Real MQTT down command, TLS transmission result and queue retirement")
+                # Concurrent API edits must acquire SQLite's writer lock before
+                # reading endpoint state, while the owning instance also writes
+                # leases/outbox state. Do not mask SQLITE_BUSY with test retries.
+                for _ in range(4):
+                    await asyncio.gather(*[
+                        call("device", "Update", device_pb.UpdateDeviceRequest(device=fetched), auth[0])
+                        for _ in range(2)
+                    ])
+                checks.append("Concurrent End Point edits succeed alongside another instance's session writes")
                 fetched.is_disabled = True
                 await call("device", "Update", device_pb.UpdateDeviceRequest(device=fetched), auth[0])
                 for _ in range(700):
@@ -409,8 +455,64 @@ json=true
                 await peer.connect()
                 await peer.uplink(b"rotated-cert")
                 checks.append("Certificate rotation disconnects old session, rejects old certificate and accepts newly provisioned certificate")
+                # Select a desired Thailand policy through the other real process.
+                # This peer still reports eu1: the policy must not fabricate RF data.
+                rf_request = gateway_pb.GetMiotyRfConfigRequest(gateway_id=gateway_eui)
+                assert not (await call("gateway", "GetMiotyRfConfig", rf_request, auth[0])).HasField("config")
+                policy = gateway_pb.MiotyRfConfig(profile_id="TH920_925")
+                rf_update = gateway_pb.UpdateMiotyRfConfigRequest(gateway_id=gateway_eui, config=policy)
+                await denied("gateway", "GetMiotyRfConfig", rf_request, auth[1])
+                await denied("gateway", "UpdateMiotyRfConfig", rf_update, auth[1])
+                await call("gateway", "UpdateMiotyRfConfig", rf_update, auth[0])
+                status = await call("gateway", "GetMiotyRfConfig", rf_request, auth[0])
+                assert status.config == policy and status.experimental and not status.tx_supported
+                assert status.min_frequency_hz == 920000000 and status.max_frequency_hz == 925000000
+                assert status.reported_bidirectional and status.tx_blockers
+                rf_update.config.tx_enabled = True
+                try:
+                    await call("gateway", "UpdateMiotyRfConfig", rf_update, auth[0])
+                    raise AssertionError("Unverified Thailand transmission was enabled")
+                except grpc.aio.AioRpcError as error:
+                    assert error.code() == grpc.StatusCode.FAILED_PRECONDITION
+                assert (await call("gateway", "GetMiotyRfConfig", rf_request, auth[0])).config == policy
+                await call("device", "Enqueue", device_pb.EnqueueDeviceQueueItemRequest(
+                    queue_item=device_pb.DeviceQueueItem(dev_eui=device_eui, data=b"blocked-by-policy")), auth[0])
+                transmitted = stats["downlinks"]
+                await peer.uplink(b"thailand-policy")
+                deadline = time.monotonic() + 10
+                while True:
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0, "Thailand policy uplink did not reach MQTT"
+                    event = await broker.event("up", device_eui, timeout=remaining)
+                    if base64.b64decode(event["data"]) == b"thailand-policy":
+                        break
+                assert event["mioty"]["packetCounter"] == peer.window
+                assert event["rxInfo"][0]["metadata"]["regional_profile"] == "TH920_925"
+                assert event["rxInfo"][0]["metadata"]["regional_profile_source"] == "desired_policy"
+                assert event["rxInfo"][0]["metadata"]["profile"] == "eu1"
+                queued = await call("device", "GetQueue", device_pb.GetDeviceQueueItemsRequest(dev_eui=device_eui), auth[0])
+                assert queued.total_count == 1 and not queued.result[0].is_pending
+                assert stats["downlinks"] == transmitted
+                await call("device", "FlushQueue", device_pb.FlushDeviceQueueRequest(dev_eui=device_eui), auth[0])
+                checks.append("TH920_925 RPC isolation, TX refusal and real MQTT uplink without radio scheduling")
             finally:
                 await peer.close()
+        if serve_ui:
+            # Leave only this disposable test environment available for manual
+            # browser verification. No authentication tokens or private keys in
+            # this manifest. Its fresh database has the default admin login.
+            manifest = {
+                "url": f"http://127.0.0.1:{alternate_api_port}/",
+                "tenant_id": tenants[0], "application_id": application.id,
+                "profile_id": profile.id, "gateway_id": gateway_eui, "device_eui": device_eui,
+                "rf_path": f"#/tenants/{tenants[0]}/gateways/{gateway_eui}/rf",
+                "events_path": f"#/tenants/{tenants[0]}/applications/{application.id}/devices/{device_eui}/events",
+                "stop_file": str(directory / "stop-ui"),
+            }
+            (directory / "ui-fixture.json").write_text(json.dumps(manifest, indent=2))
+            print(json.dumps({"ui_ready": manifest}), flush=True)
+            while not (directory / "stop-ui").exists():
+                await asyncio.sleep(0.5)
         await call("device", "Delete", device_pb.DeleteDeviceRequest(dev_eui=device_eui), auth[0])
         await call("gateway", "Delete", gateway_pb.DeleteGatewayRequest(gateway_id=gateway_eui), auth[0])
         checks.append("API device and gateway deletion")
@@ -440,6 +542,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chirpstack", type=Path, required=True, help="ChirpStack binary built with --features sqlite")
     parser.add_argument("--work-dir", type=Path, help="New directory for test files; preserved for inspection")
+    parser.add_argument("--serve-ui", action="store_true", help="Keep disposable UI fixture running until its stop-ui file exists")
     args = parser.parse_args()
     directory = args.work_dir.resolve() if args.work_dir else Path(tempfile.mkdtemp(prefix="chirpstack-mioty-e2e-"))
     if args.work_dir:
@@ -447,7 +550,7 @@ def main():
     os.chmod(directory, 0o700)
     report = {"passed": False, "checks": []}
     try:
-        asyncio.run(verify(args.chirpstack.resolve(strict=True), directory, report))
+        asyncio.run(verify(args.chirpstack.resolve(strict=True), directory, report, args.serve_ui))
         print(json.dumps(report, indent=2))
         return 0
     except Exception as error:

@@ -123,6 +123,7 @@ pub struct Filters {
     pub tenant_id: Option<Uuid>,
     pub multicast_group_id: Option<Uuid>,
     pub search: Option<String>,
+    pub gateway_type: Option<i16>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -314,6 +315,10 @@ pub async fn get_count(filters: &Filters) -> Result<i64, Error> {
         q = q.filter(gateway::dsl::tenant_id.eq(fields::Uuid::from(tenant_id)));
     }
 
+    if let Some(gateway_type) = filters.gateway_type {
+        q = q.filter(gateway::dsl::gateway_type.eq(gateway_type));
+    }
+
     if let Some(multicast_group_id) = &filters.multicast_group_id {
         q = q.filter(
             multicast_group_gateway::dsl::multicast_group_id
@@ -365,6 +370,10 @@ pub async fn list(
 
     if let Some(tenant_id) = &filters.tenant_id {
         q = q.filter(gateway::dsl::tenant_id.eq(fields::Uuid::from(tenant_id)));
+    }
+
+    if let Some(gateway_type) = filters.gateway_type {
+        q = q.filter(gateway::dsl::gateway_type.eq(gateway_type));
     }
 
     if let Some(search) = &filters.search {
@@ -672,6 +681,7 @@ pub mod test {
                     tenant_id: None,
                     multicast_group_id: None,
                     search: None,
+                    ..Default::default()
                 },
                 gws: vec![&gw],
                 count: 1,
@@ -685,6 +695,7 @@ pub mod test {
                     tenant_id: None,
                     multicast_group_id: None,
                     search: Some("uup".into()),
+                    ..Default::default()
                 },
                 gws: vec![],
                 count: 0,
@@ -698,6 +709,7 @@ pub mod test {
                     tenant_id: None,
                     multicast_group_id: None,
                     search: Some("upd".into()),
+                    ..Default::default()
                 },
                 gws: vec![&gw],
                 count: 1,
@@ -711,6 +723,7 @@ pub mod test {
                     tenant_id: Some(gw.tenant_id.into()),
                     multicast_group_id: None,
                     search: None,
+                    ..Default::default()
                 },
                 gws: vec![&gw],
                 count: 1,
@@ -724,6 +737,7 @@ pub mod test {
                     tenant_id: Some(Uuid::new_v4()),
                     multicast_group_id: None,
                     search: None,
+                    ..Default::default()
                 },
                 gws: vec![],
                 count: 0,
@@ -737,6 +751,7 @@ pub mod test {
                     tenant_id: None,
                     multicast_group_id: Some(mg.id.into()),
                     search: None,
+                    ..Default::default()
                 },
                 gws: vec![&gw],
                 count: 1,
@@ -750,6 +765,7 @@ pub mod test {
                     tenant_id: None,
                     multicast_group_id: Some(Uuid::new_v4()),
                     search: None,
+                    ..Default::default()
                 },
                 gws: vec![],
                 count: 0,
@@ -763,6 +779,7 @@ pub mod test {
                     tenant_id: None,
                     multicast_group_id: None,
                     search: None,
+                    ..Default::default()
                 },
                 gws: vec![&gw],
                 count: 1,
@@ -776,6 +793,7 @@ pub mod test {
                     tenant_id: None,
                     multicast_group_id: None,
                     search: None,
+                    ..Default::default()
                 },
                 gws: vec![&gw],
                 count: 1,
@@ -789,6 +807,7 @@ pub mod test {
                     tenant_id: None,
                     multicast_group_id: None,
                     search: None,
+                    ..Default::default()
                 },
                 gws: vec![&gw],
                 count: 1,

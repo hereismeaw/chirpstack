@@ -127,6 +127,25 @@ pub fn bytes(value: &Value, name: &str, size: Option<usize>) -> Result<Vec<u8>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn specification_derived_ping_frames() {
+        // Synthetic fixtures derived from BSSCI rev1 sections 5.1 and 5.4.1,
+        // not captured vendor traffic: exact 12-byte header + standard encodings.
+        let json = b"MIOTYB01\x1b\0\0\0{\"command\":\"ping\",\"opId\":1}";
+        let msgpack = b"MIOTYB01\x14\0\0\0\x82\xa7command\xa4ping\xa4opId\x01";
+        for (frame, encoding) in [
+            (json.as_slice(), Encoding::Json),
+            (msgpack.as_slice(), Encoding::MessagePack),
+        ] {
+            let (value, detected) = read(&mut &frame[..], 1024).await.unwrap();
+            assert_eq!(value, json!({"command":"ping", "opId":1}));
+            assert_eq!(detected, encoding);
+            let mut output = Vec::new();
+            write(&mut output, &value, encoding).await.unwrap();
+            assert_eq!(output, frame);
+        }
+    }
     #[tokio::test]
     async fn round_trip_encodings_and_full_range_eui() {
         for encoding in [Encoding::Json, Encoding::MessagePack] {

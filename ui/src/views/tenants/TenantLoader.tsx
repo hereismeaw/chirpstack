@@ -4,7 +4,6 @@ import { useParams, Routes, Route } from "react-router";
 import type { Tenant, GetTenantResponse } from "@chirpstack/chirpstack-api-grpc-web/api/tenant_pb";
 
 import TenantStore from "../../stores/TenantStore";
-import SessionStore from "../../stores/SessionStore";
 
 import TenantLayout from "./TenantLayout";
 import ListTenantUsers from "./ListTenantUsers";
@@ -28,6 +27,9 @@ import ListApplications from "../applications/ListApplications";
 import CreateApplication from "../applications/CreateApplication";
 import ApplicationLoader from "../applications/ApplicationLoader";
 
+import NetworkHealth from "./NetworkHealth";
+import MiotyNetwork from "../mioty/MiotyNetwork";
+
 function TenantLoader() {
   const [tenant, setTenant] = useState<Tenant | undefined>(undefined);
   const { tenantId } = useParams();
@@ -44,7 +46,7 @@ function TenantLoader() {
     getTenant();
 
     return () => {
-      SessionStore.removeListener("change", getTenant);
+      TenantStore.removeListener("change", getTenant);
     };
   }, [tenantId]);
 
@@ -74,6 +76,9 @@ function TenantLoader() {
       <Route path="/applications" element={<ListApplications tenant={tenant} />} />
       <Route path="/applications/create" element={<CreateApplication tenant={tenant} />} />
       <Route path="/applications/:applicationId/*" element={<ApplicationLoader tenant={tenant} />} />
+
+      <Route path="/network-health" element={<NetworkHealth tenant={tenant} />} />
+      <Route path="/mioty" element={<MiotyNetwork tenant={tenant} />} />
 
       <Route path="/*" element={<TenantLayout tenant={tenant} />} />
     </Routes>

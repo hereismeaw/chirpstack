@@ -1,6 +1,6 @@
 import { Children, useState } from "react";
 
-import { Form, Input, Row, Col, Button, Tabs, Switch, Modal, Space, notification, Select, InputNumber } from "antd";
+import { Form, Input, Row, Col, Button, Tabs, Switch, Modal, Space, notification, Select } from "antd";
 import type { TabsProps } from "antd/lib";
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { Scanner } from "@yudiel/react-qr-scanner";
@@ -18,6 +18,7 @@ import { onFinishFailed } from "../helpers";
 import EuiInput from "../../components/EuiInput";
 import DeviceProfileSelect from "../../components/DeviceProfileSelect";
 import DeviceProfileStore from "../../stores/DeviceProfileStore";
+import MiotyDeviceFields, { DEFAULT_MIOTY_VALUES } from "./MiotyDeviceFields";
 
 interface IProps {
   tenant: Tenant;
@@ -31,7 +32,6 @@ function DeviceForm(props: IProps) {
   const [form] = Form.useForm();
   const deviceType = Form.useWatch("deviceType", form) ?? props.initialValues.getDeviceType();
   const isMioty = deviceType === DeviceType.MIOTY_DEVICE;
-  const applicationCrypto = Form.useWatch(["mioty", "applicationCrypto"], form) ?? props.initialValues.getMioty()?.getApplicationCrypto() ?? 0;
   const [showScanner, setShowScanner] = useState(false);
   const [deviceProfileId, setDeviceProfileId] = useState<string | null>(null);
 
@@ -52,16 +52,20 @@ function DeviceForm(props: IProps) {
       settings.setApplicationKey(v.mioty.applicationKey || "");
       settings.setPreAttach(v.mioty.preAttach);
       settings.setApplicationCrypto(v.mioty.applicationCrypto);
-      settings.setDualChannel(v.mioty.dualChannel);
-      settings.setRepetition(v.mioty.repetition);
-      settings.setWideCarrierOffset(v.mioty.wideCarrierOffset);
-      settings.setLongBlockDistance(v.mioty.longBlockDistance);
+      settings.setDualChannel(!!v.mioty.dualChannel);
+      settings.setWideCarrierOffset(!!v.mioty.wideCarrierOffset);
+      // Downlink options only exist for bidirectional (Class A) End Points.
+      const bidirectional = v.mioty.epClass === "A";
+      settings.setRepetition(bidirectional && !!v.mioty.repetition);
+      settings.setLongBlockDistance(bidirectional && !!v.mioty.longBlockDistance);
       d.setMioty(settings);
     }
     d.setDeviceProfileId(v.deviceProfileId[v.deviceProfileId.length - 1]);
     d.setIsDisabled(v.isDisabled);
-    d.setSkipFcntCheck(v.skipFcntCheck);
-    d.setJoinEui(v.joinEui);
+    if (v.deviceType === DeviceType.LORAWAN_DEVICE) {
+      d.setSkipFcntCheck(v.skipFcntCheck);
+      d.setJoinEui(v.joinEui);
+    }
 
     // tags
     for (const elm of v.tagsMap) {
@@ -124,52 +128,22 @@ function DeviceForm(props: IProps) {
       label: "Device",
       children: (
         <>
-          <Form.Item label="Device type" name="deviceType" rules={[{ required: true }]}>
-            <Select disabled={props.update || props.disabled} options={[
-              { value: DeviceType.LORAWAN_DEVICE, label: "LoRaWAN Device" },
-              { value: DeviceType.MIOTY_DEVICE, label: "Mioty Device" },
-            ]} />
+          <Form.Item
+            label="Technology"
+            name="deviceType"
+            tooltip="The radio technology of the device. It cannot be changed after the device has been created."
+            rules={[{ required: true, message: "Please select a technology!" }]}
+          >
+            <Select
+              aria-label="Technology"
+              disabled={props.update || props.disabled}
+              options={[
+                { value: DeviceType.LORAWAN_DEVICE, label: "LoRaWAN device" },
+                { value: DeviceType.MIOTY_DEVICE, label: "mioty End Point" },
+              ]}
+            />
           </Form.Item>
-          {isMioty && <>
-            <Form.Item label="Endpoint class" name={["mioty", "epClass"]} rules={[{ required: true }]}>
-              <Select disabled={props.disabled} options={[{ value: "Z", label: "Z (unidirectional)" }, { value: "A", label: "A (bidirectional)" }]} />
-            </Form.Item>
-            <Form.Item label="Short address" name={["mioty", "shortAddress"]} rules={[{ required: true }]}>
-              <InputNumber min={0} max={65535} disabled={props.disabled} />
-            </Form.Item>
-            <Form.Item label="Pre-attach" name={["mioty", "preAttach"]} valuePropName="checked" extra="Use pre-attachment. Over-the-air attachment is not supported yet.">
-              <Switch disabled={props.disabled} />
-            </Form.Item>
-            <Form.Item label="Network key" name={["mioty", "networkKey"]}
-              extra={props.update ? "Leave empty to keep the current key." : undefined}
-              rules={[{ required: !props.update }, { pattern: /^[a-fA-F0-9]{32}$/, message: "Enter 32 hexadecimal characters." }]}>
-              <Input.Password autoComplete="new-password" disabled={props.disabled} />
-            </Form.Item>
-            <Form.Item label="Application cryptography" name={["mioty", "applicationCrypto"]} rules={[{ required: true }]}>
-              <Select disabled={props.disabled} options={[
-                { value: 0, label: "None (0)" },
-                { value: 1, label: "Confidentiality (1)" },
-                { value: 17, label: "Confidentiality and authenticity (17)" },
-              ]} />
-            </Form.Item>
-            <Form.Item label="Application key" name={["mioty", "applicationKey"]}
-              extra={props.update ? "Leave empty to keep the current key." : undefined}
-              rules={[{ required: !props.update && applicationCrypto !== 0 }, { pattern: /^[a-fA-F0-9]{32}$/, message: "Enter 32 hexadecimal characters." }]}>
-              <Input.Password autoComplete="new-password" disabled={props.disabled} />
-            </Form.Item>
-            <Form.Item label="Dual channel" name={["mioty", "dualChannel"]} valuePropName="checked">
-              <Switch disabled={props.disabled} />
-            </Form.Item>
-            <Form.Item label="Downlink repetition" name={["mioty", "repetition"]} valuePropName="checked">
-              <Switch disabled={props.disabled} />
-            </Form.Item>
-            <Form.Item label="Wide carrier offset" name={["mioty", "wideCarrierOffset"]} valuePropName="checked">
-              <Switch disabled={props.disabled} />
-            </Form.Item>
-            <Form.Item label="Long downlink block distance" name={["mioty", "longBlockDistance"]} valuePropName="checked">
-              <Switch disabled={props.disabled} />
-            </Form.Item>
-          </>}
+          {isMioty && <MiotyDeviceFields update={props.update} disabled={props.disabled} />}
           <Form.Item label="Name" name="name" rules={[{ required: true, message: "Please enter a name!" }]}>
             <Input disabled={props.disabled} />
           </Form.Item>
@@ -178,7 +152,12 @@ function DeviceForm(props: IProps) {
           </Form.Item>
           <Row gutter={24}>
             <Col span={12}>
-              <EuiInput label="Device EUI (EUI64)" name="devEui" disabled={props.update} required />
+              <EuiInput
+                label={isMioty ? "End Point EUI (EUI64)" : "Device EUI (EUI64)"}
+                name="devEui"
+                disabled={props.update}
+                required
+              />
             </Col>
             <Col span={12}>
               {!isMioty && <EuiInput
@@ -189,7 +168,6 @@ function DeviceForm(props: IProps) {
               />}
             </Col>
           </Row>
-          {isMioty && <p>The device profile supplies payload codecs and integration settings for this endpoint.</p>}
           <DeviceProfileSelect
             label="Device profile"
             name="deviceProfileId"
@@ -197,6 +175,12 @@ function DeviceForm(props: IProps) {
             required
             tenant={props.tenant}
             disabled={props.disabled}
+            protocol={isMioty ? "mioty" : "lorawan"}
+            tooltip={
+              isMioty
+                ? "Supplies the payload codec, measurements and tags of this End Point. LoRaWAN settings of the profile are not used."
+                : undefined
+            }
           />
           <Row gutter={24}>
             <Col span={12}>
@@ -309,10 +293,10 @@ function DeviceForm(props: IProps) {
   return (
     <Form
       layout="vertical"
-      initialValues={{ ...props.initialValues.toObject(), mioty: props.initialValues.getMioty()?.toObject() || {
-        epClass: "Z", shortAddress: 0, networkKey: "", applicationKey: "", preAttach: true,
-        applicationCrypto: 0, dualChannel: false, repetition: false, wideCarrierOffset: false, longBlockDistance: false,
-      } }}
+      initialValues={{
+        ...props.initialValues.toObject(),
+        mioty: props.initialValues.getMioty()?.toObject() || DEFAULT_MIOTY_VALUES,
+      }}
       onFinish={onFinish}
       onFinishFailed={onFinishFailed}
       form={form}
@@ -330,9 +314,12 @@ function DeviceForm(props: IProps) {
       <Tabs
         items={tabItems}
         tabBarExtraContent={
-          <Button type="primary" disabled={props.update} onClick={() => setShowScanner(true)}>
-            Scan QR-code
-          </Button>
+          // The QR-code format (LW:D0:...) is defined for LoRaWAN devices only.
+          !isMioty && (
+            <Button type="primary" disabled={props.update} onClick={() => setShowScanner(true)}>
+              Scan QR-code
+            </Button>
+          )
         }
       />
       <Form.Item>

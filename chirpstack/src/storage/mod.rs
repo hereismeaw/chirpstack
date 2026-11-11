@@ -30,6 +30,7 @@ pub mod helpers;
 pub mod mac_command;
 pub mod metrics;
 pub mod mioty;
+pub mod mioty_rf;
 pub mod mioty_session;
 pub mod multicast;
 pub mod passive_roaming;

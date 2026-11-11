@@ -105,14 +105,37 @@ function GatewayForm(props: IProps) {
       label: "General",
       children: (
         <>
-          <Form.Item label="Gateway type" name="gatewayType" rules={[{ required: true }]}>
-            <Select disabled={props.update || props.disabled} options={[
-              { value: GatewayType.LORAWAN, label: "LoRaWAN Gateway" },
-              { value: GatewayType.MIOTY, label: "Mioty Gateway" },
-            ]} />
+          <Form.Item
+            label="Technology"
+            name="gatewayType"
+            tooltip="The radio technology of this gateway entry. It cannot be changed after creation."
+            rules={[{ required: true, message: "Please select a technology!" }]}
+          >
+            <Select
+              aria-label="Technology"
+              disabled={props.update || props.disabled}
+              options={[
+                { value: GatewayType.LORAWAN, label: "LoRaWAN gateway" },
+                { value: GatewayType.MIOTY, label: "mioty Base Station" },
+              ]}
+            />
           </Form.Item>
-          {isMioty && <Alert type="info" showIcon style={{ marginBottom: 24 }}
-            title="Mioty Gateway" description="Register the base station EUI, then generate its TLS certificate and configure its Service Center connection." />}
+          {isMioty && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 24 }}
+              title="mioty Base Station"
+              description={
+                <>
+                  Register the Base Station EUI, generate its TLS client certificate, and point its Service Center
+                  (BSSCI) connection at this server. A LoRaWAN concentrator cannot receive mioty: only register
+                  hardware that implements a mioty Base Station. A device that hosts both a LoRaWAN gateway and a
+                  mioty Base Station is registered as two entries, one per technology, each with its own EUI.
+                </>
+              }
+            />
+          )}
           <Form.Item label="Name" name="name" rules={[{ required: true, message: "Please enter a name!" }]}>
             <Input disabled={props.disabled} />
           </Form.Item>
@@ -122,7 +145,7 @@ function GatewayForm(props: IProps) {
           <Row gutter={24}>
             <Col span={12}>
               <EuiInput
-                label="Gateway ID (EUI64)"
+                label={isMioty ? "Base Station EUI (EUI64)" : "Gateway ID (EUI64)"}
                 name="gatewayId"
                 disabled={props.update || props.disabled}
                 required

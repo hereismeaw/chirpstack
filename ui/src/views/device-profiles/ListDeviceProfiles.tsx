@@ -7,7 +7,10 @@ import type {
   ListDeviceProfilesResponse,
   DeviceProfileListItem,
 } from "@chirpstack/chirpstack-api-grpc-web/api/device_profile_pb";
-import { ListDeviceProfilesRequest } from "@chirpstack/chirpstack-api-grpc-web/api/device_profile_pb";
+import {
+  ListDeviceProfilesRequest,
+  ProfileProtocol,
+} from "@chirpstack/chirpstack-api-grpc-web/api/device_profile_pb";
 import type { Tenant } from "@chirpstack/chirpstack-api-grpc-web/api/tenant_pb";
 import { Region } from "@chirpstack/chirpstack-api-grpc-web/common/common_pb";
 
@@ -18,9 +21,17 @@ import DeviceProfileStore from "../../stores/DeviceProfileStore";
 import Admin from "../../components/Admin";
 import { useTitle } from "../helpers";
 import PageHeader from "../../components/PageHeader";
+import ProtocolTag from "../../components/ProtocolTag";
 
 interface IProps {
   tenant: Tenant;
+}
+
+// LoRaWAN MAC columns do not apply to mioty device profiles.
+const NOT_APPLICABLE = "—";
+
+function isMiotyProfile(record: DeviceProfileListItem.AsObject): boolean {
+  return record.protocol === ProfileProtocol.PROFILE_MIOTY;
 }
 
 function ListDeviceProfiles(props: IProps) {
@@ -35,11 +46,21 @@ function ListDeviceProfiles(props: IProps) {
       ),
     },
     {
+      title: "Technology",
+      dataIndex: "protocol",
+      key: "protocol",
+      width: 130,
+      render: (_text, record) => <ProtocolTag protocol={isMiotyProfile(record) ? "mioty" : "lorawan"} />,
+    },
+    {
       title: "Region",
       dataIndex: "region",
       key: "region",
       width: 150,
       render: (text, record) => {
+        if (isMiotyProfile(record)) {
+          return NOT_APPLICABLE;
+        }
         return getEnumName(Region, record.region);
       },
     },
@@ -49,6 +70,9 @@ function ListDeviceProfiles(props: IProps) {
       key: "macVersion",
       width: 150,
       render: (text, record) => {
+        if (isMiotyProfile(record)) {
+          return NOT_APPLICABLE;
+        }
         return formatMacVersion(record.macVersion);
       },
     },
@@ -58,6 +82,9 @@ function ListDeviceProfiles(props: IProps) {
       key: "regParamsRevision",
       width: 150,
       render: (text, record) => {
+        if (isMiotyProfile(record)) {
+          return NOT_APPLICABLE;
+        }
         return formatRegParamsRevision(record.regParamsRevision);
       },
     },
@@ -67,6 +94,9 @@ function ListDeviceProfiles(props: IProps) {
       key: "supportsOtaa",
       width: 150,
       render: (text, record) => {
+        if (isMiotyProfile(record)) {
+          return NOT_APPLICABLE;
+        }
         if (record.supportsOtaa) {
           return "yes";
         } else {
@@ -80,6 +110,9 @@ function ListDeviceProfiles(props: IProps) {
       key: "supportsClassB",
       width: 150,
       render: (text, record) => {
+        if (isMiotyProfile(record)) {
+          return NOT_APPLICABLE;
+        }
         if (record.supportsClassB) {
           return "yes";
         } else {
@@ -93,6 +126,9 @@ function ListDeviceProfiles(props: IProps) {
       key: "supportsClassC",
       width: 150,
       render: (text, record) => {
+        if (isMiotyProfile(record)) {
+          return NOT_APPLICABLE;
+        }
         if (record.supportsClassC) {
           return "yes";
         } else {
