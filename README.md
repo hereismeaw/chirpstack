@@ -1,6 +1,27 @@
 # ChirpStack open-source LoRaWAN(R) Network Server
 
+> **Development fork — do not use in production.**
+> This repository is still under active development. Native mioty support, the Thailand 920–925 MHz profile, and the local Docker demo are experimental. They have no regulatory approval, no verified radio firmware, and no production hardening. Do not deploy this build for a live network, and do not treat the UI values as measurements or as permission to transmit.
+
 ![CI](https://github.com/chirpstack/chirpstack/actions/workflows/main.yml/badge.svg?branch=master)
+
+## Native mioty (experimental)
+
+This fork adds mioty Base Stations and End Points inside the existing ChirpStack tenants, applications, MQTT integrations, and web UI. The local demo is documented in [docs/mioty/LOCAL_DEMO.md](docs/mioty/LOCAL_DEMO.md). Current status and open limits are in [HANDOVER_MIOTY.md](HANDOVER_MIOTY.md).
+
+The screenshots below are from the disposable local demo (`admin` / `admin`). They show a simulated Base Station, not a physical radio.
+
+Transmit-enabled regional policy on a mioty Base Station:
+
+![RF policy with transmission supported and transmit-enabled selected](docs/mioty/images/rf-policy-transmit.png)
+
+Decoded mioty uplink on the device Events page:
+
+![Device event detail for a simulated mioty uplink](docs/mioty/images/device-uplink-event.png)
+
+Network health for the same tenant:
+
+![Network health with one online mioty Base Station](docs/mioty/images/network-health.png)
 
 ChirpStack is an open-source LoRaWAN(R) Network Server which can be used to set
 up LoRaWAN networks. ChirpStack provides a web-interface for the management of

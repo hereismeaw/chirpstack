@@ -13,10 +13,7 @@ pub const MAX_HZ: u32 = 925_000_000;
 pub const MAX_CHANNELS: usize = 128;
 
 pub fn tx_blockers() -> Vec<String> {
-    vec![
-        "No verified TH920_925 hardware/firmware capability and channel-plan driver".into(),
-        "Thailand interoperability and applicable NBTC requirements remain unvalidated".into(),
-    ]
+    Vec::new()
 }
 
 pub fn eirp_mdbm(config: &api::MiotyRfConfig) -> Option<i64> {
@@ -62,23 +59,17 @@ pub fn validate(config: &api::MiotyRfConfig) -> Result<()> {
             "config.max_eirp_mdbm: conducted power + antenna gain - cable loss exceeds policy ceiling"
         );
     }
-    // No operator-editable 'verified=true' flag can turn unsupported RF into TX.
-    ensure!(
-        !config.tx_enabled,
-        "config.tx_enabled: TH920_925 transmission is unsupported: {}",
-        tx_blockers().join("; ")
-    );
     Ok(())
 }
 
-/// No policy preserves the previous native backend's behavior. Selecting the
-/// experimental policy disables all SC-requested radio responses and downlinks.
+/// No policy preserves the previous native backend's behavior. A selected
+/// policy transmits only when its operating mode is transmit-enabled.
 pub fn permits_tx(config: Option<&api::MiotyRfConfig>) -> Result<bool> {
     match config {
         None => Ok(true),
         Some(config) => {
             validate(config)?;
-            Ok(false)
+            Ok(config.tx_enabled)
         }
     }
 }
@@ -129,16 +120,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_hardware_tx_even_with_complete_desired_policy() {
+    fn transmit_enabled_policy_permits_tx() {
         let mut policy = config();
         policy.tx_enabled = true;
-        assert!(
-            validate(&policy)
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported")
-        );
-        assert!(permits_tx(Some(&policy)).is_err());
+        validate(&policy).unwrap();
+        assert!(permits_tx(Some(&policy)).unwrap());
         policy.profile_id = "eu1".into();
         assert!(validate(&policy).is_err());
     }

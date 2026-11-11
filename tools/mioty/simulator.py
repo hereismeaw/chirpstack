@@ -168,7 +168,7 @@ class Peer:
             server_hostname=self.args.server_name or self.args.host,
         ), self.args.timeout)
         connect = {"command": "con", "opId": 0, "version": "1.0.0", "bsEui": self.args.gateway_eui,
-                   "bidi": True, "vendor": "ChirpStack simulator", "snBsUuid": self.bs_uuid}
+                   "bidi": True, "vendor": "Test Gateway", "snBsUuid": self.bs_uuid}
         if self.resuming:
             connect.update(snBsOpId=self.last_bs, snScOpId=self.last_sc)
         await self.send(connect)

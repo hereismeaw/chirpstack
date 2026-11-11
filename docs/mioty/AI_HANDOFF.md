@@ -1,5 +1,16 @@
 # mioty continuation handoff
 
+## Session resume — 12 November 2026 (Asia/Bangkok), server restored
+
+Resumed the newest Claude and Codex sessions for this repository, then restored the local demo.
+
+- Claude session `5ad32b32-5a90-40a3-a963-a9fd05ccda86` (title: multi-protocol ChirpStack UI). The reader skipped 456 unknown records, so the transcript is incomplete. Treat the source tree and `UI_IMPLEMENTATION.md` as the record of that UI work. The session ended on a usage limit, not on a recorded code change after the existing UI milestone.
+- Codex session `01a1cb35-1d0a-7630-b96d-1b97df200396`. It brought up the Docker demo (`admin` / `admin`, tenant **Mioty E2E A**, simulated uplinks). The next request was an in-app **mioty Service Center** page (listener status, Service Center EUI, Base Station sessions, endpoint counts). That page was not started in source: the user then asked for a handover and a running server. There is still no dedicated Service Center status API. `ui/src/views/mioty/MiotyNetwork.tsx` remains the tenant mioty screen and already uses existing gateway list and RF APIs.
+- The demo container had been left **unhealthy**. `e2e.py` failed on `device.FlushQueue` (`0 bytes read on a total of 12 expected bytes`) before `--serve-ui`, so ports 8080/1884 were closed while the container stayed up. `docker compose -f compose.mioty-demo.yml restart demo` created a new disposable fixture. After restart the container was **healthy** and `http://127.0.0.1:8080/` returned HTTP 200 (531 bytes). This run’s IDs are in the container file `/data/current.json` (tenant `4270292b-2ed9-4f98-9a1c-a67b2204904e`, gateway `04e59c5dda8c0057`, device `482ad1a83e23673b`). They change on every start. MQTT for this demo is `localhost:1884`.
+- The image was not rebuilt. Source edits after the image build are not in the running UI. No commit, deploy, or user-database migration was made. Browser click-through was not done in this resume. The FlushQueue failure was not root-caused; a later start can hit it again and take the UI down the same way.
+
+Next code step, if the Service Center screen is still wanted: add a read-only tenant-scoped API for listener/config facts that are not already on `ListGateways` / `GetMiotyRfConfig`, then a page next to `MiotyNetwork`, then rebuild the demo with `tools/mioty/Start-Demo.ps1`. Do not invent BSSCI fields or label this an external Service Center.
+
 ## Latest UI continuation checkpoint — 12 November 2026
 
 The sections below originally described the earlier backend milestone. The
@@ -22,7 +33,10 @@ validation reports in the commit containing this document. Preserve prior work.
 
 Docker Engine 29.9.3 / Compose 5.7.0 are available and `docker compose config
 --quiet` passed. Integration validation continues in the existing isolated WSL
-environment; no Compose services or deployment were started for this check.
+environment; no Compose services or deployment were started for that check.
+The subsequent user-requested local Docker demo is described in
+[LOCAL_DEMO.md](LOCAL_DEMO.md). It runs an isolated disposable fixture, with
+continuous authenticated simulated uplinks and localhost-only HTTP/MQTT ports.
 
 Final continuation checks: UI type-check/build passed; 103 UI tests passed;
 SQLite and PostgreSQL each passed 256 Rust tests. The rebuilt SQLite binary

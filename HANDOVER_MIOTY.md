@@ -1,5 +1,29 @@
 # Handover: Native Mioty support in ChirpStack
 
+## สถานะล่าสุด — 12 พฤศจิกายน 2026 (Asia/Bangkok), หลังตรวจบน UI
+
+**ยังเป็นงานพัฒนา ห้ามใช้ใน production.** ไม่มีการรับรอง NBTC, ไม่มีเฟิร์มแวร์วิทยุที่ตรวจแล้ว และเดโมเป็นตัวจำลองใน Docker เท่านั้น
+
+ตรวจบน UI ของเดโมแล้ว:
+
+- RF policy ของ Base Station `67bf0079d8b46633` แสดง Transmission supported by server = Yes และเลือก Transmit-enabled ได้ พร้อม power budget (27 dBm, gain 8 dBi, cable loss 0.7 dB, EIRP ceiling 36 dBm, calculated EIRP 34.3 dBm)
+- Vendor ที่ตัวจำลองรายงานคือ Test Gateway
+- Events ของ End Point `783c4d9a4f2b1ac5` แสดง uplink mioty, packet counter, RSSI/SNR, โปรไฟล์ TH920_925 และ payload ที่ถอดรหัสแล้ว
+- Network health แสดง mioty Base Station online 1 และ mioty End Point active 1
+
+ภาพอยู่ใน `docs/mioty/images/`. รายละเอียดเดโมอยู่ที่ `docs/mioty/LOCAL_DEMO.md`. รหัส tenant/gateway/device เปลี่ยนทุกครั้งที่สตาร์ทคอนเทนเนอร์
+
+## สถานะก่อนหน้าในวันเดียวกัน — รีสตาร์ทเดโม
+
+ทำต่อจาก Claude (`5ad32b32-…`, งาน UI หลายโปรโตคอล) และ Codex (`01a1cb35-…`, เดโม Docker) แล้วรีสตาร์ทเซิร์ฟเวอร์เดโม
+
+- เปิดใช้ได้ที่ http://127.0.0.1:8080/ ล็อกอิน `admin` / `admin` คอนเทนเนอร์ `chirpstack-mioty-demo-demo-1` สถานะ **healthy** และ HTTP 200
+- รอบก่อนค้าง unhealthy เพราะชุดทดสอบในคอนเทนเนอร์ล้มที่ `device.FlushQueue` (`0 bytes read on a total of 12 expected bytes`) ก่อนเปิด UI ค้างไว้ รอบนี้รีสตาร์ทแล้วได้ fixture ใหม่
+- Tenant รอบนี้ `4270292b-2ed9-4f98-9a1c-a67b2204904e` ชื่อใน UI คือ **Mioty E2E A** — รหัสเปลี่ยนทุกครั้งที่สตาร์ท ดูของจริงที่ `docker compose -f compose.mioty-demo.yml exec demo cat /data/current.json`
+- หน้า Service Center แยก (สถานะ listener, EUI, เซสชัน Base Station) ที่ Codex กำลังจะทำ **ยังไม่ได้เขียนในซอร์ส** หน้าที่มีคือ `/mioty` (`MiotyNetwork.tsx`)
+- อิมเมจไม่ได้ build ใหม่ งานในซอร์สหลังอิมเมจนี้ไม่ได้อยู่ใน UI ที่รัน ไม่ได้ commit หรือ deploy
+- รายละเอียดภาษาอังกฤษอยู่ที่ `docs/mioty/AI_HANDOFF.md` ส่วนด้านล่างของไฟล์นี้เป็นประวัติเก่า อย่าใช้จุด “ยังไม่มี server.rs” เป็นสถานะปัจจุบัน
+
 ## สถานะล่าสุด — 5 พฤศจิกายน 2026 (Asia/Bangkok)
 
 ผู้ใช้สั่งให้ทำต่อแล้ว และยืนยันว่า **ยังไม่มี Gateway / Device จริง** สำหรับทดสอบ

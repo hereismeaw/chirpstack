@@ -1,5 +1,9 @@
 # Mioty gateway/device simulator
 
+For the ready-to-run Windows/WSL Docker UI fixture with continuous uplinks, see
+[LOCAL_DEMO.md](../../docs/mioty/LOCAL_DEMO.md). It uses the native simulator and
+isolated real services; no radio is involved.
+
 This command connects to ChirpStack's native BSSCI listener over mutually
 authenticated TLS. It simulates one gateway and one preattached device without
 transmitting radio packets. It does not create accounts, gateways or devices.

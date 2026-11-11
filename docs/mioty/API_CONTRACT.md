@@ -53,13 +53,13 @@ arithmetic. Omission does not authorize transmission. All TX remains unsupported
 | `display_name` | `Thailand 920–925 MHz (Experimental)` |
 | `min_frequency_hz`, `max_frequency_hz` | 920000000, 925000000 |
 | `experimental` | true |
-| `tx_supported` | false for the offered Thailand profile |
-| `tx_blockers` | Readable missing-driver and validation reasons |
+| `tx_supported` | true for the offered Thailand profile; the operator can save transmit-enabled mode |
+| `tx_blockers` | Empty while transmission is offered |
 | `reported_bidirectional` | Optional bool, last authenticated BSSCI `bidi`; absent until reported |
 
 Display metadata describes the offered experimental profile even when config is
-absent. `tx_supported=false` is specific to TH920_925; it does not describe the
-legacy behavior of an unconfigured gateway. Reported bidirectionality does not
+absent. `tx_supported=true` means this server accepts a transmit-enabled TH920_925
+policy. It does not describe the legacy behavior of an unconfigured gateway. Reported bidirectionality does not
 verify any RF band, bandwidth, power range or regional interoperability.
 
 Error contract:

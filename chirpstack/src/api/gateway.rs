@@ -59,7 +59,7 @@ impl GatewayService for Gateway {
             min_frequency_hz: crate::mioty::rf::MIN_HZ,
             max_frequency_hz: crate::mioty::rf::MAX_HZ,
             experimental: true,
-            tx_supported: false,
+            tx_supported: true,
             tx_blockers: crate::mioty::rf::tx_blockers(),
             reported_bidirectional: gw
                 .properties
@@ -1219,7 +1219,8 @@ pub mod test {
             .into_inner();
         assert!(initial.config.is_none());
         assert!(initial.reported_bidirectional.is_none());
-        assert!(!initial.tx_supported);
+        assert!(initial.tx_supported);
+        assert!(initial.tx_blockers.is_empty());
         let policy = api::MiotyRfConfig {
             profile_id: crate::mioty::rf::PROFILE_ID.into(),
             ..Default::default()
@@ -1233,20 +1234,18 @@ pub mod test {
             .extensions_mut()
             .insert(AuthID::User(owner.id.into()));
         service.update_mioty_rf_config(request).await.unwrap();
-        let mut invalid = policy.clone();
-        invalid.tx_enabled = true;
-        let mut request = Request::new(write(invalid));
+        let mut enabled = policy.clone();
+        enabled.tx_enabled = true;
+        let mut request = Request::new(write(enabled));
         request
             .extensions_mut()
             .insert(AuthID::User(owner.id.into()));
-        assert_eq!(
-            service
-                .update_mioty_rf_config(request)
-                .await
-                .unwrap_err()
-                .code(),
-            tonic::Code::FailedPrecondition
-        );
+        service.update_mioty_rf_config(request).await.unwrap();
+        let mut request = Request::new(write(policy.clone()));
+        request
+            .extensions_mut()
+            .insert(AuthID::User(owner.id.into()));
+        service.update_mioty_rf_config(request).await.unwrap();
         let mut request = Request::new(read());
         request
             .extensions_mut()

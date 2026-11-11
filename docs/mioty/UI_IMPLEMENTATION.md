@@ -176,7 +176,9 @@ uplinks and two allowed transmissions occurred before selecting TH policy; no
 transmission was allowed under that policy. All fixture processes were cleaned up.
 
 Docker Engine 29.9.3 and Compose 5.7.0 are installed; daemon access and
-`docker compose config --quiet` passed. No Compose containers were started.
+`docker compose config --quiet` passed. No Compose containers were started during
+that checkpoint. The later local Docker setup is documented in
+[LOCAL_DEMO.md](LOCAL_DEMO.md), with an isolated container and continuous uplinks.
 The working WSL validation environment was retained for reproducible integration.
 
 Browser tooling inventory returned no connected browsers and creating an in-app

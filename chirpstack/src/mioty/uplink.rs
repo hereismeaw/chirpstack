@@ -120,7 +120,10 @@ pub async fn receive(
         super::rf::validate(&policy)?;
         metadata.insert("regional_profile".into(), policy.profile_id);
         metadata.insert("regional_profile_source".into(), "desired_policy".into());
-        metadata.insert("regional_tx_enabled".into(), "false".into());
+        metadata.insert(
+            "regional_tx_enabled".into(),
+            policy.tx_enabled.to_string(),
+        );
     }
     for field in ["profile", "mode", "eqSnr", "rxDuration"] {
         if let Some(v) = value.get(field) {

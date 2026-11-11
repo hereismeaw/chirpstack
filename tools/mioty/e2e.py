@@ -11,6 +11,7 @@ import copy
 from datetime import datetime, timedelta, timezone
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -142,7 +143,7 @@ class Broker:
         self.client.loop_stop()
 
 
-async def verify(binary, directory, report, serve_ui=False):
+async def verify(binary, directory, report, serve_ui=False, ui_uplink_interval=0.0):
     root = Path(__file__).resolve().parents[2]
     modules = generate_clients(root, directory)
     processes, logs = [], []
@@ -465,15 +466,14 @@ json=true
                 await denied("gateway", "UpdateMiotyRfConfig", rf_update, auth[1])
                 await call("gateway", "UpdateMiotyRfConfig", rf_update, auth[0])
                 status = await call("gateway", "GetMiotyRfConfig", rf_request, auth[0])
-                assert status.config == policy and status.experimental and not status.tx_supported
+                assert status.config == policy and status.experimental and status.tx_supported
                 assert status.min_frequency_hz == 920000000 and status.max_frequency_hz == 925000000
-                assert status.reported_bidirectional and status.tx_blockers
+                assert status.reported_bidirectional and not status.tx_blockers
                 rf_update.config.tx_enabled = True
-                try:
-                    await call("gateway", "UpdateMiotyRfConfig", rf_update, auth[0])
-                    raise AssertionError("Unverified Thailand transmission was enabled")
-                except grpc.aio.AioRpcError as error:
-                    assert error.code() == grpc.StatusCode.FAILED_PRECONDITION
+                await call("gateway", "UpdateMiotyRfConfig", rf_update, auth[0])
+                assert (await call("gateway", "GetMiotyRfConfig", rf_request, auth[0])).config.tx_enabled
+                rf_update.config.tx_enabled = False
+                await call("gateway", "UpdateMiotyRfConfig", rf_update, auth[0])
                 assert (await call("gateway", "GetMiotyRfConfig", rf_request, auth[0])).config == policy
                 await call("device", "Enqueue", device_pb.EnqueueDeviceQueueItemRequest(
                     queue_item=device_pb.DeviceQueueItem(dev_eui=device_eui, data=b"blocked-by-policy")), auth[0])
@@ -494,7 +494,7 @@ json=true
                 assert queued.total_count == 1 and not queued.result[0].is_pending
                 assert stats["downlinks"] == transmitted
                 await call("device", "FlushQueue", device_pb.FlushDeviceQueueRequest(dev_eui=device_eui), auth[0])
-                checks.append("TH920_925 RPC isolation, TX refusal and real MQTT uplink without radio scheduling")
+                checks.append("TH920_925 RPC isolation, transmit-enabled policy accepted, receive-only mode sends no radio downlink")
             finally:
                 await peer.close()
         if serve_ui:
@@ -507,12 +507,32 @@ json=true
                 "profile_id": profile.id, "gateway_id": gateway_eui, "device_eui": device_eui,
                 "rf_path": f"#/tenants/{tenants[0]}/gateways/{gateway_eui}/rf",
                 "events_path": f"#/tenants/{tenants[0]}/applications/{application.id}/devices/{device_eui}/events",
+                "mqtt_port": mqtt_port,
+                "uplink_interval_seconds": ui_uplink_interval,
                 "stop_file": str(directory / "stop-ui"),
             }
             (directory / "ui-fixture.json").write_text(json.dumps(manifest, indent=2))
             print(json.dumps({"ui_ready": manifest}), flush=True)
-            while not (directory / "stop-ui").exists():
-                await asyncio.sleep(0.5)
+            # Keep the same authenticated simulator/counter state for live UI
+            # review. TH policy is already selected and continues to block TX.
+            if ui_uplink_interval:
+                with state_lock(state_path):
+                    demo_peer = VerifiedPeer(alternate_args, state, stats)
+                    try:
+                        await demo_peer.connect()
+                        next_uplink = 0.0
+                        while not (directory / "stop-ui").exists():
+                            if time.monotonic() >= next_uplink:
+                                await demo_peer.uplink(b"\x01\x02\x03")
+                                event = await broker.event("up", device_eui)
+                                assert event["mioty"]["packetCounter"] == demo_peer.window
+                                next_uplink = time.monotonic() + ui_uplink_interval
+                            await asyncio.sleep(0.5)
+                    finally:
+                        await demo_peer.close()
+            else:
+                while not (directory / "stop-ui").exists():
+                    await asyncio.sleep(0.5)
         await call("device", "Delete", device_pb.DeleteDeviceRequest(dev_eui=device_eui), auth[0])
         await call("gateway", "Delete", gateway_pb.DeleteGatewayRequest(gateway_id=gateway_eui), auth[0])
         checks.append("API device and gateway deletion")
@@ -543,14 +563,21 @@ def main():
     parser.add_argument("--chirpstack", type=Path, required=True, help="ChirpStack binary built with --features sqlite")
     parser.add_argument("--work-dir", type=Path, help="New directory for test files; preserved for inspection")
     parser.add_argument("--serve-ui", action="store_true", help="Keep disposable UI fixture running until its stop-ui file exists")
+    parser.add_argument("--ui-uplink-interval", type=float, default=0.0,
+                        help="Send simulated uplinks while serving the UI (seconds; 0 disables)")
     args = parser.parse_args()
+    if not math.isfinite(args.ui_uplink_interval) or args.ui_uplink_interval < 0:
+        parser.error("UI uplink interval must be finite and nonnegative")
+    if args.ui_uplink_interval and not args.serve_ui:
+        parser.error("--ui-uplink-interval requires --serve-ui")
     directory = args.work_dir.resolve() if args.work_dir else Path(tempfile.mkdtemp(prefix="chirpstack-mioty-e2e-"))
     if args.work_dir:
         directory.mkdir(mode=0o700, parents=False, exist_ok=False)
     os.chmod(directory, 0o700)
     report = {"passed": False, "checks": []}
     try:
-        asyncio.run(verify(args.chirpstack.resolve(strict=True), directory, report, args.serve_ui))
+        asyncio.run(verify(args.chirpstack.resolve(strict=True), directory, report,
+                           args.serve_ui, args.ui_uplink_interval))
         print(json.dumps(report, indent=2))
         return 0
     except Exception as error:

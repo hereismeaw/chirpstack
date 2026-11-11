@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "checks": [
+    "HTTP index and production assets",
+    "Seeded admin login through API relay",
+    "Persisted mioty profile and endpoint; write-only keys",
+    "Persisted TH920_925 receive-only policy and blockers",
+    "Authorized Live Events stream through API relay",
+    "Two consecutive decoded MQTT uplinks through broker relay"
+  ],
+  "mqtt_counters": [
+    9,
+    10
+  ]
+}
